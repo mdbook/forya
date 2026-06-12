@@ -62,12 +62,19 @@ rollback.
   previously-uncached cards. Preload gradient inside the window: active + the
   immediate neighbour in the travel direction get `auto`, the rest `metadata`.
   (Superseded the 0.1.0 `preloadFor` "+1 warmer" metadata window.)
-  - **0.3.0 release hysteresis:** `VideoCard` no longer drops `src` the instant a
-    card leaves the window — it holds it ~1.2s (`RELEASE_DELAY_MS`) before
-    `video.load()`, cancelled if the card re-enters first. This stops a small
-    back-scroll (past a card then straight back) from reload→blank-frame. The
-    active-always-live guarantee is unchanged (active is always in-window, so it
-    never reaches the release path).
+  - **0.3.1 — virtualized at the MOUNT level, not just `src`.** The window logic
+    moved to a pure `src/lib/window.ts` `feedWindow()` (guarded by
+    `tests/window.test.ts`, incl. the active-always-live invariant). `Feed` now
+    only **mounts** the heavy `VideoCard` for `live` cards; off-window cards
+    render a cheap `.card-rest` placeholder (no `<video>`, no effects). This was
+    the black-screen fix: the old code mounted a `<video>` component for _every_
+    item, so a 12k-file feed instantiated ~12k players and blew mobile Safari's
+    memory. Leaving the window now **unmounts** the player (removing the
+    `<video>` releases the decoder; `VideoCard.onDestroy` also pause+load()s to
+    make it explicit) — which **supersedes the 0.3.0 `src`/decoder hysteresis**
+    (removed). The `preloadBehind` window (default 2) is the back-scroll buffer
+    now. `.card` cells still always render (100dvh, `data-index`, IO-observed) so
+    scroll height + the single IO are intact.
 - **The page feed is randomized per load; resume was removed (0.3.0).**
   `+page.server.ts` shuffles the scan with a fresh server-side seed each request
   (`seededShuffle`, reused from `videos.ts` — that file is _not_ modified). SSR'd,
@@ -78,6 +85,17 @@ rollback.
   dangling. **`/api/feed` is unchanged** — still mtime-desc by default with opt-in
   `?shuffle=1&seed=N`; only the page default changed. `hidden.ts` filters by
   filename, so hides still work post-shuffle.
+  - **0.3.1 lazy-load.** The page no longer inlines the whole manifest (6.7MB on
+    liked) into the SSR payload — it sends only the first page (`FIRST_PAGE` = 24)
+    plus `seed` + `total`. `Feed` lazy-loads the rest near the scroll tail via
+    `/api/feed?shuffle=1&seed=<same>&offset&limit` (additive params; the no-param
+    default contract is untouched). Threading the **same seed** makes
+    `seededShuffle` deterministic, so each page continues the same order (client
+    dedupes by name). **Edge:** the ~10s scan memo means if `VIDEO_DIR` changes
+    mid-session the continuing order could shift (dupes/gaps); acceptable for a
+    homelab feed and fully stabilised by **0.3.2**'s persistent scan. The cold
+    ~9s scan on the biggest feed is the other half of the slow-load and is the
+    0.3.2 target (a `videos.ts` change → full Range re-gate).
 - **Object-fit is symmetric (0.3.0).** `src/lib/fit.ts` `pickFit(vw, vh,
 viewportAR)` is pure (guarded by `tests/fit.test.ts`): it letterboxes
   (`contain`) once the clip/viewport aspect ratios diverge past `MAX_COVER_RATIO`
@@ -114,24 +132,30 @@ don't fight the browser by decoding many at once. So: both attributes on every
 `<video>`, only the active card plays, and `.play()` returns a Promise whose
 `.catch()` surfaces a tap-to-play overlay when iOS still refuses.
 
-**0.3.0 autoplay/first-frame handling** (the deterministic half; iOS-specific
-tuning is operator-on-device, criterion 3):
+**Autoplay / first-frame handling** (the deterministic half; iOS-specific tuning
+is operator-on-device, criterion 3):
 
 - **Muted autoplay is never gated.** The active card always attempts
-  `muted`+`playsinline` autoplay on load with no tap. The session "playback
-  unlocked" flag (`stores/playback.svelte.ts`, set on the first tap-to-play or
-  unmute) **must not** gate that initial muted attempt — it only decides whether a
-  _transiently-rejected_ play is retried once (when already unlocked) vs. shown as
-  a manual play button. Don't let the flag creep into the autoplay path.
+  `muted`+`playsinline` autoplay with no tap. On rejection it **retries once on
+  the next frame, still muted and NOT gated on `playback.unlocked`** (0.3.1 — a
+  freshly-mounted/scrolled-to card can transiently reject before it's ready;
+  gating the retry was the best-tt "scroll needs a manual tap" regression). Only
+  if the retry also fails does the manual play button show. `playback.unlocked`
+  (`stores/playback.svelte.ts`) governs the unmuted path only — keep it out of
+  the muted-autoplay path.
 - **Spinner and play button are mutually exclusive.** `VideoCard` shows the play
   glyph only when `active && (blocked || paused)` (autoplay refused _or_ the user
   tapped pause) and the buffering spinner only when no play glyph is up — so the
-  spinner can never render behind the play button (the reported bug). A normally-
-  autoplaying card flashes neither.
-- **First-frame nudge.** On `loadedmetadata`, if the video is paused at `t=0` we
-  nudge `currentTime` a hair so iOS paints a poster frame instead of blank black
-  on a scrolled-to / autoplay-blocked card. Best-effort; the gradient+filename
-  placeholder stays until `loadeddata` regardless.
+  spinner can never render behind the play button. A normally-autoplaying card
+  flashes neither.
+- **Reveal-gate, not a nudge (0.3.1).** The `<video>` only becomes visible
+  (`opacity: 1`) once it has actually reached `playing` (`hasPlayed`); until then
+  the gradient + filename placeholder shows. So a blocked / pre-gesture / still-
+  buffering card shows the placeholder, **never a black `<video>`**, and a user-
+  paused card (already `hasPlayed`) shows its real painted frame. This replaced
+  the 0.3.0 first-frame `currentTime` nudge, which forced a seek that painted a
+  black frame under memory pressure (the liked/favorite black-screen) and
+  interrupted the active card's pending `play()`.
 
 ## Future TODOs (not built in v1)
 

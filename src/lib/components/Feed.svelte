@@ -20,12 +20,55 @@
 	} from '$lib/stores/prefs';
 	import { unlockPlayback } from '$lib/stores/playback.svelte';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
+	import { feedWindow } from '$lib/window';
 
 	let {
 		items,
 		feedName,
-		settings
-	}: { items: FeedItem[]; feedName: string; settings: FeedSettings } = $props();
+		settings,
+		total,
+		seed
+	}: {
+		/** First page of the randomized feed (SSR'd); the rest is lazy-loaded. */
+		items: FeedItem[];
+		feedName: string;
+		settings: FeedSettings;
+		/** Total items in the shuffled feed, for the lazy-load stop condition. */
+		total: number;
+		/** Per-request shuffle seed — threaded to /api/feed so each lazily-fetched
+		 *  page continues the SAME order (deterministic seededShuffle). */
+		seed: number;
+	} = $props();
+
+	// 0.3.1 lazy-load: `items` is only the first page (slim SSR — we no longer
+	// inline the whole multi-MB manifest). `extra` accumulates lazily-fetched
+	// pages; `allItems` is the full known list. Using a separate $state array
+	// (rather than seeding $state from the `items` prop) keeps the first page
+	// server-rendered with no SSR→client reorder and no props-in-state warning.
+	let extra = $state<FeedItem[]>([]);
+	const allItems = $derived([...items, ...extra]);
+	let fetching = $state(false);
+	const PAGE = 24;
+
+	async function loadMore() {
+		if (fetching || allItems.length >= total) return;
+		fetching = true;
+		try {
+			const res = await fetch(
+				`/api/feed?shuffle=1&seed=${seed}&offset=${allItems.length}&limit=${PAGE}`
+			);
+			if (res.ok) {
+				const data: { items?: FeedItem[] } = await res.json();
+				const have = new Set(allItems.map((i) => i.name));
+				const fresh = (data.items ?? []).filter((i) => !have.has(i.name));
+				if (fresh.length) extra = [...extra, ...fresh];
+			}
+		} catch {
+			/* offline / transient — retried on the next near-tail scroll */
+		} finally {
+			fetching = false;
+		}
+	}
 
 	let activeIndex = $state(0);
 	let dir = $state(1); // travel direction: +1 scrolling down, -1 scrolling up
@@ -58,7 +101,7 @@
 	// Initial value is set from settings (or the stored pref) in onMount; the
 	// literal here is just the pre-hydration placeholder (no video has ended yet).
 	let autoAdvance = $state(false);
-	const visible = $derived(applyHidden(items, hidden));
+	const visible = $derived(applyHidden(allItems, hidden));
 	const activeItem = $derived(visible[activeIndex]);
 
 	function toggleAutoAdvance() {
@@ -104,7 +147,7 @@
 		hidden.add(name);
 		saveHidden(feedName, hidden);
 		// If we hid the last card, clamp the active index back into range.
-		const count = applyHidden(items, hidden).length;
+		const count = applyHidden(allItems, hidden).length;
 		if (activeIndex >= count) activeIndex = Math.max(0, count - 1);
 		lastHidden = name;
 		clearTimeout(undoTimer);
@@ -119,24 +162,13 @@
 		clearTimeout(undoTimer);
 	}
 
-	/**
-	 * Reactive lazy-load window that follows the active card. Only indices inside
-	 * `[active - behind, active + ahead]` carry a real `<video src>` (`live`),
-	 * which caps how many decoders iOS holds at once; everything else is a
-	 * srcless placeholder. The window is direction-biased: scrolling up swaps
-	 * ahead/behind so sustained back-scroll starts loading the previously-
-	 * uncached cards. The active card (d === 0) is ALWAYS live — so a j/k jump or
-	 * fast scroll to any index force-loads + plays it (no srcless active card).
-	 * Preload gradient: active + the immediate neighbour in the travel direction
-	 * buffer aggressively (`auto`); the rest of the window gets `metadata`.
-	 */
-	function windowState(index: number): { live: boolean; preload: 'auto' | 'metadata' | 'none' } {
-		const ahead = dir < 0 ? settings.preloadBehind : settings.preloadAhead;
-		const behind = dir < 0 ? settings.preloadAhead : settings.preloadBehind;
-		const d = index - activeIndex;
-		if (d < -behind || d > ahead) return { live: false, preload: 'none' };
-		const immediate = dir < 0 ? -1 : 1;
-		return { live: true, preload: d === 0 || d === immediate ? 'auto' : 'metadata' };
+	// The lazy-load/mount window for `index`, via the pure `feedWindow` (guarded
+	// by tests/window.test.ts). `live` cards mount the heavy VideoCard (a real
+	// `<video src>`); off-window cards render a cheap placeholder — capping live
+	// decoders to the window regardless of feed size. Direction-biased and
+	// active-always-live; see window.ts.
+	function windowState(index: number) {
+		return feedWindow(index, activeIndex, dir, settings);
 	}
 
 	function activeVideo(): HTMLVideoElement | null {
@@ -243,6 +275,16 @@
 	$effect(() => {
 		saveAutoAdvance(feedName, autoAdvance);
 	});
+
+	// Lazy-load the next page as the active card nears the loaded tail. Reads
+	// activeIndex + visible.length so it re-evaluates on scroll and after each
+	// append (catching up if still near the end). `loadMore` self-guards against
+	// overlap and the total cap.
+	$effect(() => {
+		if (activeIndex >= visible.length - (settings.preloadAhead + 3)) {
+			loadMore();
+		}
+	});
 </script>
 
 <svelte:window onkeydown={onKeydown} onresize={readViewport} onorientationchange={readViewport} />
@@ -256,17 +298,28 @@
 	<div class="feed" bind:this={feedEl}>
 		{#each visible as item, i (item.name)}
 			{@const ws = windowState(i)}
+			<!-- The .card cell ALWAYS renders (100dvh, data-index, IO-observed) so
+			     scroll height + the single-IO windowing are intact; only the heavy
+			     VideoCard inside it mounts for windowed cards — off-window cards get
+			     a cheap placeholder, capping live <video>s to the window regardless
+			     of feed size. active is always live (feedWindow guarantee), so the
+			     active card always mounts the real player. -->
 			<div class="card" data-index={i} bind:this={cardEls[i]}>
-				<VideoCard
-					{item}
-					active={i === activeIndex}
-					live={ws.live}
-					preload={ws.preload}
-					{muted}
-					{autoAdvance}
-					{viewportAR}
-					onfinished={() => scrollTo(activeIndex + 1)}
-				/>
+				{#if ws.live}
+					<VideoCard
+						{item}
+						active={i === activeIndex}
+						preload={ws.preload}
+						{muted}
+						{autoAdvance}
+						{viewportAR}
+						onfinished={() => scrollTo(activeIndex + 1)}
+					/>
+				{:else}
+					<div class="card-rest">
+						<span class="card-rest-caption">{item.name}</span>
+					</div>
+				{/if}
 			</div>
 		{/each}
 	</div>
@@ -318,6 +371,24 @@
 	.empty .hint {
 		opacity: 0.5;
 		font-size: 0.85rem;
+	}
+
+	/* Cheap stand-in for off-window cards (no <video>, no decoder). Mirrors the
+	   VideoCard pre-load placeholder so scrolling past unmounted cards looks
+	   identical to a not-yet-loaded one. */
+	.card-rest {
+		display: flex;
+		align-items: flex-end;
+		width: 100%;
+		height: 100%;
+		padding: 1.5rem;
+		background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+	}
+
+	.card-rest-caption {
+		font-size: 0.85rem;
+		opacity: 0.55;
+		word-break: break-word;
 	}
 
 	.info-overlay {
