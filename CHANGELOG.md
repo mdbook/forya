@@ -4,6 +4,45 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.4.0 — playback resilience (autoplay cascade + load priority)
+
+Operator on-device found that a per-video iOS muted-autoplay rejection (some
+source clips are oddly encoded — a transcode/normalization concern, separate)
+also broke the **next** preloaded video. Root-caused (with a complete code
+review) to three missing guards in the client playback state machine; all three
+fixed here. Frontend-only — the serving layer is untouched.
+
+### Fixed
+
+- **Autoplay cascade.** A failed autoplay used to (a) keep retrying on a card the
+  user had already scrolled past, (b) never release its decoder, and (c) sit
+  beside an eagerly-preloading neighbour — so one bad clip poisoned the next.
+  Now: the play retry is **generation-guarded** (a stale/scrolled-past/destroyed
+  attempt no-ops; `AbortError` is treated as benign, not a failure), a
+  **definitively-failed video releases its decoder** (drops `src`, re-attached on
+  tap — the placeholder already covers it visually), and a `MediaError` is
+  handled (`onerror`) instead of leaving an eternal spinner. One bad video now
+  shows only its own tap-to-play and never breaks the next.
+- **Load priority (slow connections).** Preload is now **readiness-gated**: until
+  the currently-showing video actually reaches `playing`, it is the _only_ card
+  fetching (neighbours stay mounted but idle). The feed loads the current video
+  first instead of pulling several at once on a cold start, and on scroll the
+  about-to-play card immediately becomes the priority. This also removes the
+  decode contention that fed the cascade.
+
+### Changed
+
+- Removed the now-dead `playback.unlocked` flag (0.3.1's unconditional retry left
+  it with no readers).
+
+### Notes
+
+- No new env vars (clean watchtower swap). The muted+playsinline autoplay-on-load
+  is still gesture-free; the single IntersectionObserver and mount-window are
+  unchanged (only the `preload` hint is priority-gated).
+- The _reason_ some clips reject autoplay (inconsistent fps/colorspace) is a
+  separate source-normalization effort; 0.4 makes the player resilient to it.
+
 ## 0.3.2 — kill the cold-scan stall (dir-mtime cache + single-flight)
 
 Serving-layer perf fix for the large-feed cold load. Pre-existing (0.3.0 had it

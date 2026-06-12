@@ -18,7 +18,6 @@
 		loadAutoAdvance,
 		saveAutoAdvance
 	} from '$lib/stores/prefs';
-	import { unlockPlayback } from '$lib/stores/playback.svelte';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
 	import { feedWindow } from '$lib/window';
 
@@ -72,6 +71,13 @@
 
 	let activeIndex = $state(0);
 	let dir = $state(1); // travel direction: +1 scrolling down, -1 scrolling up
+	// Readiness gate (0.4): false until the active card actually reaches `playing`.
+	// While false, `feedWindow` lets ONLY the active card fetch (neighbours stay
+	// mounted but `preload:none`) — so a cold/slow start pulls one stream and a
+	// failing active never has an eager neighbour decoding alongside it. Reset to
+	// false on every active-index change (so a scroll re-prioritises the new
+	// about-to-play card), set true by the active card's `onready`.
+	let activeReady = $state(false);
 	let muted = $state(true);
 	let feedEl = $state<HTMLElement>();
 	let cardEls = $state<HTMLElement[]>([]);
@@ -168,7 +174,7 @@
 	// decoders to the window regardless of feed size. Direction-biased and
 	// active-always-live; see window.ts.
 	function windowState(index: number) {
-		return feedWindow(index, activeIndex, dir, settings);
+		return feedWindow(index, activeIndex, dir, settings, activeReady);
 	}
 
 	function activeVideo(): HTMLVideoElement | null {
@@ -182,7 +188,6 @@
 
 	function toggleMute() {
 		muted = !muted;
-		unlockPlayback(); // a tap is a real user gesture
 		// First-tap audio unlock: flip the live video inside the user gesture.
 		const v = activeVideo();
 		if (v) {
@@ -194,7 +199,6 @@
 	function togglePlayActive() {
 		const v = activeVideo();
 		if (!v) return;
-		unlockPlayback(); // keyboard play is a gesture too
 		if (v.paused) v.play().catch(() => {});
 		else v.pause();
 	}
@@ -241,6 +245,7 @@
 						if (!Number.isNaN(idx) && idx !== activeIndex) {
 							dir = idx > activeIndex ? 1 : -1;
 							activeIndex = idx;
+							activeReady = false; // re-gate: prioritise the new about-to-play card
 						}
 					}
 				}
@@ -249,7 +254,11 @@
 		);
 
 		for (const el of cardEls) if (el) io.observe(el);
-		return () => io?.disconnect();
+		return () => {
+			io?.disconnect();
+			clearTimeout(undoTimer);
+			clearTimeout(modeTimer);
+		};
 	});
 
 	// (Re)observe current cards whenever the visible list changes — undo re-adds a
@@ -314,6 +323,7 @@
 						{autoAdvance}
 						{viewportAR}
 						onfinished={() => scrollTo(activeIndex + 1)}
+						onready={() => (activeReady = true)}
 					/>
 				{:else}
 					<div class="card-rest">

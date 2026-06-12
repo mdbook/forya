@@ -11,10 +11,9 @@
 	// component, which removes the <video> and releases the iOS decoder; the
 	// onDestroy teardown makes that release explicit. This supersedes the 0.3.0
 	// in-component src/decoder hysteresis.
-	import { onDestroy, untrack } from 'svelte';
+	import { flushSync, onDestroy, untrack } from 'svelte';
 	import Play from '@lucide/svelte/icons/play';
 	import { pickFit } from '$lib/fit';
-	import { unlockPlayback } from '$lib/stores/playback.svelte';
 	import type { FeedItem } from '$lib/types';
 
 	let {
@@ -24,7 +23,8 @@
 		muted,
 		autoAdvance,
 		viewportAR,
-		onfinished
+		onfinished,
+		onready
 	}: {
 		item: FeedItem;
 		active: boolean;
@@ -36,6 +36,9 @@
 		 *  re-letterboxes on rotate/resize, not just at load. */
 		viewportAR: number;
 		onfinished: () => void;
+		/** Fired when THIS card (while active) reaches `playing` — Feed uses it to
+		 *  release the readiness gate so neighbours may start preloading (0.4). */
+		onready?: () => void;
 	} = $props();
 
 	let el = $state<HTMLVideoElement>();
@@ -54,6 +57,16 @@
 	// two can never stack (the "buffer behind play button" bug).
 	let blocked = $state(false);
 	let paused = $state(false);
+	// `released` (0.4): a definitively-failed autoplay drops its `src` to free the
+	// iOS decoder so it can't poison the NEXT card (the autoplay cascade). The
+	// reveal-gate already shows the placeholder, so nothing visual is lost; a tap
+	// (or re-activation) re-attaches `src` and retries.
+	let released = $state(false);
+	// Monotonic token that cancels stale async play retries (0.4). Bumped on every
+	// fresh attempt, on going inactive, and on destroy — a retry whose token is
+	// stale no-ops, so a scrolled-past / unmounted card never replays its decode
+	// on top of the next card's startup.
+	let playGen = 0;
 	// Intrinsic video dimensions (set once metadata loads); fit derives from these.
 	let vw = $state(0);
 	let vh = $state(0);
@@ -118,20 +131,36 @@
 	function tryPlay(v: HTMLVideoElement) {
 		// Muted autoplay is gesture-free (SPEC §4, criterion 3): we ALWAYS attempt
 		// it. A scrolled-to / freshly-mounted active card can transiently reject
-		// before it's ready, so on rejection we retry ONCE on the next frame —
-		// still muted+playsinline, NOT gated on playback.unlocked. Only if the
-		// retry also fails do we surface the manual play button (`blocked`).
+		// before it's ready, so on rejection we retry ONCE on the next frame. Every
+		// callback is guarded by `gen` (0.4): if the card went inactive / unmounted
+		// / a newer attempt started, the stale callback NO-OPS — so a failing decode
+		// can't keep firing on top of the next card. `AbortError` (a pause- or
+		// load-interrupted play) is benign and never marks the card blocked.
+		const gen = ++playGen;
 		v.muted = muted;
 		const p = v.play();
-		if (p && typeof p.then === 'function') {
-			p.then(() => (blocked = false)).catch(() => {
-				requestAnimationFrame(() => {
-					v.play()
-						.then(() => (blocked = false))
-						.catch(() => (blocked = true));
-				});
+		if (!p || typeof p.then !== 'function') return;
+		p.then(() => {
+			if (gen === playGen) blocked = false;
+		}).catch((err: unknown) => {
+			if (gen !== playGen || !active) return;
+			if (err instanceof DOMException && err.name === 'AbortError') return;
+			requestAnimationFrame(() => {
+				if (gen !== playGen || !active || !el) return;
+				el.play()
+					.then(() => {
+						if (gen === playGen) blocked = false;
+					})
+					.catch((err2: unknown) => {
+						if (gen !== playGen || !active) return;
+						if (err2 instanceof DOMException && err2.name === 'AbortError') return;
+						// Definitive failure → surface tap-to-play AND release the decoder
+						// so this card can't poison the next one.
+						blocked = true;
+						released = true;
+					});
 			});
-		}
+		});
 	}
 
 	// Active → play; inactive → pause. Reads only `active`; mute changes are
@@ -140,9 +169,18 @@
 		const v = el;
 		if (!v) return;
 		if (active) {
-			untrack(() => tryPlay(v));
+			untrack(() => {
+				// Fresh attempt on (re)activation: re-attach src if it was released by
+				// an earlier failure, clear the blocked affordance, then play.
+				released = false;
+				blocked = false;
+				tryPlay(v);
+			});
 		} else {
-			untrack(() => v.pause());
+			untrack(() => {
+				playGen++; // cancel any pending retry for this card
+				v.pause();
+			});
 		}
 	});
 
@@ -156,6 +194,7 @@
 	// unmounts this component, so detach the source and load() to free the iOS
 	// decoder deterministically rather than waiting on GC.
 	onDestroy(() => {
+		playGen++; // cancel any pending retry — element is going away
 		const v = el;
 		if (!v) return;
 		v.pause();
@@ -166,8 +205,13 @@
 	function togglePlay() {
 		const v = el;
 		if (!v) return;
-		unlockPlayback(); // a tap is a real user gesture
 		if (v.paused) {
+			// If a prior failure released `src`, re-attach it synchronously (still
+			// inside this tap gesture) before playing.
+			if (released) {
+				released = false;
+				flushSync();
+			}
 			paused = false;
 			blocked = false;
 			tryPlay(v);
@@ -183,7 +227,7 @@
 		bind:this={el}
 		bind:currentTime
 		bind:duration
-		src={item.url}
+		src={released ? undefined : item.url}
 		{preload}
 		muted
 		playsinline
@@ -195,6 +239,13 @@
 			if (active && autoAdvance) onfinished();
 		}}
 		onwaiting={() => (buffering = true)}
+		onerror={() => {
+			// A media/decode error must not leave an eternal spinner or hold a
+			// poisoned pipeline: release the decoder; surface tap-to-play if active.
+			buffering = false;
+			released = true;
+			if (active) blocked = true;
+		}}
 		onplay={() => {
 			paused = false;
 			blocked = false;
@@ -203,6 +254,7 @@
 			hasPlayed = true;
 			buffering = false;
 			blocked = false;
+			if (active) onready?.();
 		}}
 	></video>
 

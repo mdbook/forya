@@ -60,4 +60,54 @@ describe('feedWindow', () => {
 			false
 		);
 	});
+
+	it('defaults to the steady-state gradient when activeReady is omitted (pre-0.4 behaviour)', () => {
+		const active = 50;
+		expect(feedWindow(active + 1, active, 1, CFG).preload).toBe('auto');
+		expect(feedWindow(active + 2, active, 1, CFG).preload).toBe('metadata');
+	});
+});
+
+describe('feedWindow — readiness gate (0.4 load priority)', () => {
+	const active = 50;
+
+	it('before the active card is ready: ONLY the active card fetches', () => {
+		// active still fetches (current-first), in both directions
+		expect(feedWindow(active, active, 1, CFG, false)).toEqual({ live: true, preload: 'auto' });
+		expect(feedWindow(active, active, -1, CFG, false)).toEqual({ live: true, preload: 'auto' });
+		// every other in-window card is mounted (live) but NOT fetching
+		for (const d of [-2, -1, 1, 2, 3]) {
+			expect(feedWindow(active + d, active, 1, CFG, false)).toEqual({
+				live: true,
+				preload: 'none'
+			});
+		}
+	});
+
+	it('active-always-live holds even pre-ready (jump target force-mounts + fetches)', () => {
+		for (const dir of [1, -1]) {
+			for (const a of [0, 7, 11877]) {
+				expect(feedWindow(a, a, dir, CFG, false)).toEqual({ live: true, preload: 'auto' });
+			}
+		}
+	});
+
+	it('once ready: neighbours escalate to the gradient', () => {
+		expect(feedWindow(active + 1, active, 1, CFG, true).preload).toBe('auto'); // immediate
+		expect(feedWindow(active + 2, active, 1, CFG, true).preload).toBe('metadata');
+		expect(feedWindow(active - 1, active, 1, CFG, true).preload).toBe('metadata');
+	});
+
+	it('out-of-window stays dead regardless of readiness', () => {
+		expect(feedWindow(active + 4, active, 1, CFG, false).live).toBe(false);
+		expect(feedWindow(active - 3, active, 1, CFG, false).live).toBe(false);
+		expect(feedWindow(active + 4, active, 1, CFG, true).live).toBe(false);
+	});
+
+	it('scroll-priority: a fresh active index (not yet ready) is the sole fetch', () => {
+		// Scrolled from 50 to 51 before 50 escalated → activeReady reset to false.
+		// 51 is now active+auto; the just-left 50 (now a neighbour) drops to none.
+		expect(feedWindow(51, 51, 1, CFG, false)).toEqual({ live: true, preload: 'auto' });
+		expect(feedWindow(50, 51, 1, CFG, false)).toEqual({ live: true, preload: 'none' });
+	});
 });

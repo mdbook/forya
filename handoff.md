@@ -154,12 +154,36 @@ is operator-on-device, criterion 3):
 
 - **Muted autoplay is never gated.** The active card always attempts
   `muted`+`playsinline` autoplay with no tap. On rejection it **retries once on
-  the next frame, still muted and NOT gated on `playback.unlocked`** (0.3.1 — a
-  freshly-mounted/scrolled-to card can transiently reject before it's ready;
-  gating the retry was the best-tt "scroll needs a manual tap" regression). Only
-  if the retry also fails does the manual play button show. `playback.unlocked`
-  (`stores/playback.svelte.ts`) governs the unmuted path only — keep it out of
-  the muted-autoplay path.
+  the next frame, still muted** (a freshly-mounted/scrolled-to card can
+  transiently reject before it's ready). Only if the retry also fails does the
+  manual play button show. (0.4 removed the old `playback.unlocked` flag — it had
+  no readers once the retry became unconditional.)
+- **Cascade guards (0.4) — a failed autoplay must not break the NEXT card.**
+  `VideoCard` has three guards, all in the play path: (1) **generation token**
+  `playGen` — every attempt takes `gen = ++playGen`; the rAF retry + both
+  `.then/.catch` no-op if `gen !== playGen || !active`. Going inactive and
+  `onDestroy` bump `playGen`, so a scrolled-past / unmounted card can't keep
+  replaying its decode on top of the next card's startup. `AbortError`
+  (pause/load-interrupted play) is treated as benign — never marks `blocked`. (2)
+  **decoder release on definitive failure** — when the retry also rejects (or
+  `onerror` fires), `released = true` drops `src` (`src={released ? undefined :
+item.url}`) to free the iOS decoder so a bad clip can't poison the next; a tap
+  (`togglePlay`, with `flushSync` to re-attach `src` inside the gesture) or
+  re-activation clears it and retries. (3) **`onerror`** handles a `MediaError`
+  (release + tap-to-play) instead of an eternal spinner. Root cause was an
+  un-cancelled retry + a never-released failed element + an eager `preload=auto`
+  neighbour decoding during the failure — see the readiness gate next.
+- **Readiness-gated preload (0.4) — load the current video first.** `feedWindow`
+  takes an `activeReady` arg: until the active card reaches `playing`, ONLY it
+  fetches (`preload:auto`); every other in-window card stays **mounted but
+  `preload:none`**. `Feed` tracks `activeReady` ($state, reset to `false` in the
+  IO callback on every active-index change, set `true` by the active card's
+  `onready` fired from `onplaying`). Effect: a cold/slow start pulls one stream;
+  on scroll the new active card is instantly the sole fetch (about-to-play
+  priority); and a failing active never has an eager neighbour decoding alongside
+  it (kills the cascade's overlap). The mount window + active-always-live are
+  unchanged — only the `preload` HINT is gated. Guarded by `tests/window.test.ts`
+  (`activeReady` cases + active-always-live in both states).
 - **Spinner and play button are mutually exclusive.** `VideoCard` shows the play
   glyph only when `active && (blocked || paused)` (autoplay refused _or_ the user
   tapped pause) and the buffering spinner only when no play glyph is up — so the
