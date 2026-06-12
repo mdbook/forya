@@ -7,6 +7,8 @@ export default defineConfig({
 		// Unit tests live in tests/ (range/videos guards) and may also sit
 		// alongside source. Server-side Node environment — no DOM needed.
 		include: ['tests/**/*.{test,spec}.{js,ts}', 'src/**/*.{test,spec}.{js,ts}'],
+		exclude: ['tests/setup.ts', '**/node_modules/**'],
+		setupFiles: ['./tests/setup.ts'],
 		environment: 'node',
 		passWithNoTests: true
 	}

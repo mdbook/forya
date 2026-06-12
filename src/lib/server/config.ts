@@ -1,10 +1,13 @@
 // Runtime configuration, read once from the environment (SPEC §3).
 //
-// We use $env/dynamic/private because the image is built once and configured
-// per-container at run time (VIDEO_DIR / FEED_NAME differ across the three
-// homelab instances). Never hardcode a video path or the feed name where an
-// env var belongs.
-import { env } from '$env/dynamic/private';
+// The image is built once and configured per-container at run time (VIDEO_DIR /
+// FEED_NAME differ across the three homelab instances), so this must be read at
+// runtime, never baked at build. We read process.env directly: with
+// adapter-node, process.env IS the runtime env source that $env/dynamic/private
+// proxies — reading it here is equivalent at runtime and stays testable (the
+// $env/dynamic/private virtual module is a build-time snapshot under vitest).
+// Never hardcode a video path or the feed name where an env var belongs.
+const env = process.env;
 
 function parseBool(value: string | undefined, fallback: boolean): boolean {
 	if (value === undefined || value === '') return fallback;
