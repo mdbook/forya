@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { config } from '$lib/server/config';
 import { safeMediaPath } from '$lib/server/videos';
 import { readPoster } from '$lib/server/poster';
+import { enqueueGeneration } from '$lib/server/worker';
 
 // GET /api/poster/<name>?v=<mtimeMs> → the cached JPEG poster for a video, or
 // **204 No Content** when there's no poster yet (the client then falls back to
@@ -36,7 +37,12 @@ export const GET: RequestHandler = async ({ params, url }) => {
 	const key = Number.isFinite(v) && v > 0 ? v : mtimeMs;
 
 	const poster = await readPoster(name, key);
-	if (!poster) return new Response(null, { status: 204 }); // graceful degrade
+	if (!poster) {
+		// Lazy generation: kick the worker (fire-and-forget, OFF this response) so
+		// the poster is ready on a later request, then degrade to the placeholder.
+		enqueueGeneration(name, key, full);
+		return new Response(null, { status: 204 });
+	}
 
 	return new Response(new Uint8Array(poster), {
 		status: 200,

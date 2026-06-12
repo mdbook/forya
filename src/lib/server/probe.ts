@@ -4,9 +4,9 @@
 // (spawning ffprobe) is the M4 worker's job and is NEVER on the SSR/Range path;
 // the request path only ever does `enrichItems`, which is cache-READ-only and an
 // identity no-op when the DATA_DIR feature is off (manifest stays byte-identical).
-import { execFile } from 'node:child_process';
 import { config } from './config';
 import { cacheEnabled, readCache, writeCache } from './dataCache';
+import { nicedExecFile } from './nicedExec';
 import type { FeedItem } from '$lib/types';
 
 export interface VideoMeta {
@@ -21,28 +21,25 @@ export type ProbeRunner = (filePath: string) => Promise<string>;
 
 const PROBE_TIMEOUT_MS = 30_000;
 
-/** Default runner: ffprobe → JSON of the first video stream's dims + duration.
- *  Rejects on spawn/timeout/nonzero. Only the M4 worker calls this — never a
- *  request hot path. */
-export const ffprobeRunner: ProbeRunner = (filePath) =>
-	new Promise((resolve, reject) => {
-		execFile(
-			'ffprobe',
-			[
-				'-v',
-				'error',
-				'-select_streams',
-				'v:0',
-				'-show_entries',
-				'stream=width,height:format=duration',
-				'-of',
-				'json',
-				filePath
-			],
-			{ timeout: PROBE_TIMEOUT_MS, maxBuffer: 1 << 20 },
-			(err, stdout) => (err ? reject(err) : resolve(stdout))
-		);
-	});
+/** Default runner: ffprobe → JSON of the first video stream's dims + duration,
+ *  spawned at low priority (M4). Rejects on spawn/timeout/nonzero. Only the M4
+ *  worker calls this — never a request hot path. */
+export const ffprobeRunner: ProbeRunner = async (filePath) =>
+	(await nicedExecFile(
+		'ffprobe',
+		[
+			'-v',
+			'error',
+			'-select_streams',
+			'v:0',
+			'-show_entries',
+			'stream=width,height:format=duration',
+			'-of',
+			'json',
+			filePath
+		],
+		{ timeout: PROBE_TIMEOUT_MS, maxBuffer: 1 << 20 }
+	)) as string;
 
 /** Pure: map ffprobe JSON → VideoMeta, or null if unusable (no/zero dims). */
 export function parseProbe(json: string): VideoMeta | null {

@@ -3,9 +3,9 @@
 // the M4 worker's job (OFF any request path), and the request path only READS the
 // cache. Posters are cached as JPEG under DATA_DIR/posters keyed name+mtime;
 // nothing here spawns/writes when the DATA_DIR feature is off.
-import { execFile } from 'node:child_process';
 import { config } from './config';
 import { cacheEnabled, readCache, writeCache } from './dataCache';
+import { nicedExecFile } from './nicedExec';
 
 /** Runs ffmpeg to extract one JPEG frame from `filePath`, resolving its bytes. */
 export type PosterRunner = (filePath: string) => Promise<Buffer>;
@@ -13,29 +13,26 @@ export type PosterRunner = (filePath: string) => Promise<Buffer>;
 const POSTER_TIMEOUT_MS = 30_000;
 const POSTER_SECONDS = 0.5; // grab a frame ~0.5s in to skip black intros
 
-/** Default runner: ffmpeg → one mjpeg frame to stdout. Worker-only — never a
- *  request hot path. */
-export const ffmpegPosterRunner: PosterRunner = (filePath) =>
-	new Promise((resolve, reject) => {
-		execFile(
-			'ffmpeg',
-			[
-				'-ss',
-				String(POSTER_SECONDS),
-				'-i',
-				filePath,
-				'-frames:v',
-				'1',
-				'-f',
-				'image2',
-				'-c:v',
-				'mjpeg',
-				'-'
-			],
-			{ timeout: POSTER_TIMEOUT_MS, maxBuffer: 8 << 20, encoding: 'buffer' },
-			(err, stdout) => (err ? reject(err) : resolve(stdout as Buffer))
-		);
-	});
+/** Default runner: ffmpeg → one mjpeg frame to stdout, spawned at low priority
+ *  (M4). Worker-only — never a request hot path. */
+export const ffmpegPosterRunner: PosterRunner = async (filePath) =>
+	(await nicedExecFile(
+		'ffmpeg',
+		[
+			'-ss',
+			String(POSTER_SECONDS),
+			'-i',
+			filePath,
+			'-frames:v',
+			'1',
+			'-f',
+			'image2',
+			'-c:v',
+			'mjpeg',
+			'-'
+		],
+		{ timeout: POSTER_TIMEOUT_MS, maxBuffer: 8 << 20, encoding: 'buffer' }
+	)) as Buffer;
 
 /** Pure: a plausible COMPLETE JPEG? (SOI `FFD8` … EOI `FFD9`.) Used to never
  *  cache/serve a truncated or non-image payload. */
