@@ -1,93 +1,111 @@
-# Forya
+# forya
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
+An **iOS-first vertical video feed** (TikTok-style) that serves both the UI and
+the video bytes — with correct HTTP Range support — from one self-contained
+Docker image. Point it at a directory of videos and it just works:
 
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://gitlab.mdbook.me/mikayla/forya.git
-git branch -M main
-git push -uf origin main
+```bash
+docker run -p 3000:3000 -v /path/to/videos:/srv/videos registry.mdbook.me/mikayla/forya
 ```
 
-## Integrate with your tools
+Then open <http://localhost:3000>. On an iPhone, use **Share → Add to Home
+Screen** to launch it full-screen like a native app.
 
-* [Set up project integrations](https://gitlab.mdbook.me/mikayla/forya/-/settings/integrations)
+> _Screenshot / demo gif: TODO._
 
-## Collaborate with your team
+Built with SvelteKit (adapter-node) + Svelte 5 + TypeScript. No database, no
+build step at runtime, no ffmpeg — one Node process scans the directory and
+streams the files.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## Why
 
-## Test and Deploy
+It's a focused rewrite of a Caddy-file-server + React feed that was buggy on iOS
+Safari: autoplay rejected, `100vh` layout breaking under the dynamic toolbar,
+many videos decoding at once, and broken seek/scrub from mishandled HTTP Range.
+forya fixes those at the root — an iOS-tuned feed UI over a thin, **Range-correct**
+serving backend. See [`handoff.md`](./handoff.md) for the full story.
 
-Use the built-in continuous integration in GitLab.
+## Features
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+- **Correct HTTP Range** (`206` / `Content-Range` / `Accept-Ranges`) so iOS
+  plays and seeks — this is the whole point of the app.
+- **iOS-correct feed**: `muted`+`playsinline` autoplay, `100dvh`/`100svh`
+  scroll-snap (never `100vh`), one video playing at a time, tap-to-play
+  fallback, mute toggle.
+- **Installable PWA**: per-instance home-screen name, standalone portrait.
+- **Self-contained**: serves UI + bytes from one image; runs non-root.
+- Desktop fallback: ↑/↓ + `j`/`k` to move, Space to play/pause, `m` to mute.
 
-***
+## Configuration
 
-# Editing this README
+All via environment variables:
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+| Variable        | Default       | Description                                                            |
+| --------------- | ------------- | ---------------------------------------------------------------------- |
+| `VIDEO_DIR`     | `/srv/videos` | Directory scanned for videos (mount it read-only).                     |
+| `FEED_NAME`     | `feed`        | Title / branding, PWA home-screen name, and client storage key prefix. |
+| `IGNORE_HIDDEN` | `true`        | Hide dotfiles and `*.partial` (mid-download) files.                    |
+| `PORT`          | `3000`        | Listen port (adapter-node native).                                     |
+| `HOST`          | `0.0.0.0`     | Listen host (adapter-node native).                                     |
 
-## Suggestions for a good README
+### The `/srv/videos` contract
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+forya treats `VIDEO_DIR` as **read-only input it does not own**. It only reads;
+it never writes, renames, or deletes. Mount it `:ro`:
 
-## Name
-Choose a self-explaining name for your project.
+```bash
+docker run -p 3000:3000 -v /my/videos:/srv/videos:ro \
+  -e FEED_NAME=liked registry.mdbook.me/mikayla/forya
+```
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+Supported extensions: **`.mp4` `.mov` `.webm` `.m4v`**. Dotfiles and `*.partial`
+files are skipped when `IGNORE_HIDDEN=true` (the default), so a downloader
+writing `clip.mp4.partial` won't surface a half-file. Default feed order is
+most-recently-modified first.
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+### Endpoints
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+- `GET /` — the feed UI.
+- `GET /api/feed` — JSON manifest: `{ feed, items: [{ name, url, size, mtime, type }] }`. `?shuffle=1&seed=N` for a deterministic shuffle.
+- `GET|HEAD /api/media/<name>` — the video bytes, with full Range support.
+- `GET /api/healthz` — `200 ok` (healthcheck).
+- `GET /manifest.webmanifest` — the PWA manifest, branded with `FEED_NAME`.
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+## Auth
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+forya ships **no built-in authentication** (v1). Gate it at your reverse proxy.
+This homelab fronts the public domains with **Authentik forward-auth** and
+leaves the LAN open. _TODO: optional in-app native OIDC._
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+## Multiple feeds
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+One image, one feed per container. To serve several feeds, run several
+containers with different `VIDEO_DIR` + `FEED_NAME`. _Multi-feed within a single
+instance is a future TODO, not built now._
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+## Development
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+```bash
+npm install
+npm run dev          # dev server
+npm run check        # svelte-check
+npm run lint         # eslint
+npm run format:check # prettier
+npm test             # vitest (Range + scan guards)
+npm run build        # adapter-node build → ./build
+node build           # run the built server
+```
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+## Repository
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+The canonical repository is **GitLab** (`gitlab.mdbook.me/mikayla/forya`), which
+runs CI and publishes the image. It **push-mirrors** to
+[`github.com/mdbook/forya`](https://github.com/mdbook/forya) for public OSS
+visibility. **Issues and pull requests on the GitHub mirror are not watched** —
+please use GitLab.
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+[MIT](./LICENSE) © Mikayla D. Burke

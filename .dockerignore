@@ -1,0 +1,13 @@
+node_modules
+.svelte-kit
+build
+.git
+.gitignore
+.gitlab-ci.yml
+tests
+.vscode
+.claude
+.env
+.env.*
+npm-debug.log*
+*.md

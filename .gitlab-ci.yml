@@ -1,0 +1,129 @@
+variables:
+  FF_NETWORK_PER_BUILD: 'true'
+
+stages:
+  - verify
+  - build
+  - notification
+
+# ---------------------------------------------------------------------------
+# verify — typecheck, lint, format, unit tests (SPEC §7). Runs on dev, main, MRs.
+# ---------------------------------------------------------------------------
+verify:
+  stage: verify
+  image: node:20-alpine
+  script:
+    - npm ci
+    - npm run check
+    - npm run lint
+    - npm run format:check
+    - npm test
+    # VERSION must mirror package.json (bump both in the same commit — AGENTS.md).
+    - |
+      pkg_version="$(node -p "require('./package.json').version")"
+      file_version="$(tr -d ' \t\r\n' < VERSION)"
+      if [ "$pkg_version" != "$file_version" ]; then
+        echo "VERSION ($file_version) must mirror package.json version ($pkg_version) — bump both."
+        exit 1
+      fi
+      echo "VERSION mirrors package.json ($pkg_version)."
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - when: on_success
+
+# ---------------------------------------------------------------------------
+# version_guard — fail the release if :$VERSION is already published, forcing a
+# bump per release. alpine:3.20 + curl (NOT inside kaniko: the kaniko debug
+# image's busybox wget can't complete a TLS handshake with the GitLab API).
+# main only — dev republishes :dev freely.
+# ---------------------------------------------------------------------------
+version_guard:
+  stage: verify
+  image: alpine:3.20
+  script:
+    - apk add --no-cache curl >/dev/null
+    - IMAGE_VERSION_TAG="$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n 1)"
+    - test -n "$IMAGE_VERSION_TAG"
+    - |
+      repos_json="$(curl -sf --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/registry/repositories" 2>/dev/null || true)"
+      registry_repository_id="$(printf '%s' "$repos_json" | grep -o '"id":[0-9]*' | head -n1 | grep -o '[0-9]*')"
+      if [ -n "$registry_repository_id" ]; then
+        tag_status="$(curl -o /dev/null -w '%{http_code}' -sf \
+          --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/registry/repositories/$registry_repository_id/tags/$IMAGE_VERSION_TAG" \
+          2>/dev/null || echo 000)"
+        if [ "$tag_status" = "200" ]; then
+          echo "Release tag '$IMAGE_VERSION_TAG' already exists. Bump package.json + VERSION before publishing another release image."
+          exit 1
+        fi
+        echo "Release tag '$IMAGE_VERSION_TAG' is available (HTTP $tag_status)."
+      else
+        echo "No existing container registry repository found; release tag '$IMAGE_VERSION_TAG' is available."
+      fi
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# ---------------------------------------------------------------------------
+# build — Kaniko image build + branch-tagged push (SPEC §7).
+#   main → :latest, :$VERSION, :$CI_COMMIT_SHA
+#   dev  → :dev, :$CI_COMMIT_SHA
+# ---------------------------------------------------------------------------
+build:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: ['']
+  script:
+    - export IMAGE_VERSION_TAG="$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n 1)"
+    - test -n "$IMAGE_VERSION_TAG"
+    - export IMAGE_DESTINATIONS="--destination $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+    - if [ "$CI_COMMIT_BRANCH" = "main" ]; then export IMAGE_DESTINATIONS="$IMAGE_DESTINATIONS --destination $CI_REGISTRY_IMAGE:$IMAGE_VERSION_TAG --destination $CI_REGISTRY_IMAGE:latest"; fi
+    - if [ "$CI_COMMIT_BRANCH" = "dev" ]; then export IMAGE_DESTINATIONS="$IMAGE_DESTINATIONS --destination $CI_REGISTRY_IMAGE:dev"; fi
+    - mkdir -p /kaniko/.docker
+    - printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}' "$CI_REGISTRY" "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" > /kaniko/.docker/config.json
+    - >
+      /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+      $IMAGE_DESTINATIONS
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+
+# ---------------------------------------------------------------------------
+# notification — Discord webhook on success/failure (SPEC §7), via the shared
+# ci-discord-hook.sh from gitlab.mdbook.me/mikayla/scripts.
+# ---------------------------------------------------------------------------
+success_notification:
+  stage: notification
+  image: alpine:3.20
+  script:
+    - apk add curl git
+    - wget https://gitlab.mdbook.me/mikayla/scripts/-/raw/master/ci-discord-hook.sh
+    - chmod +x ci-discord-hook.sh
+    - /bin/sh ci-discord-hook.sh success $WEBHOOK_URL
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"'
+      when: on_success
+
+failure_notification:
+  stage: notification
+  image: alpine:3.20
+  script:
+    - apk add curl git
+    - wget https://gitlab.mdbook.me/mikayla/scripts/-/raw/master/ci-discord-hook.sh
+    - chmod +x ci-discord-hook.sh
+    - /bin/sh ci-discord-hook.sh failure $WEBHOOK_URL
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"'
+      when: on_failure
