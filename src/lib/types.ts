@@ -13,6 +13,17 @@ export interface FeedItem {
 	mtime: number;
 	/** MIME type, e.g. `video/mp4`. */
 	type: string;
+	// Optional probed metadata (0.5/M2), present only when the DATA_DIR feature is
+	// on AND this item has been probed. ADDITIVE — older clients ignore them and
+	// the manifest is byte-identical without DATA_DIR. `width`/`height` let the
+	// client pre-set object-fit before the <video> loads (kills the fit-jump);
+	// `duration` seeds the seek bar before load.
+	/** Intrinsic video width in px. */
+	width?: number;
+	/** Intrinsic video height in px. */
+	height?: number;
+	/** Duration in seconds. */
+	duration?: number;
 }
 
 /** The `/api/feed` response shape. */
@@ -32,4 +43,8 @@ export interface FeedSettings {
 	preloadBehind: number;
 	/** Initial autoplay-next preference (AUTO_ADVANCE). */
 	autoAdvance: boolean;
+	/** Whether generated posters are available (DATA_DIR set, 0.5). When false the
+	 *  client never requests `/api/poster`, so a disabled instance makes no extra
+	 *  requests. */
+	posters: boolean;
 }

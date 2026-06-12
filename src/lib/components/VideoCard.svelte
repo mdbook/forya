@@ -23,6 +23,7 @@
 		muted,
 		autoAdvance,
 		viewportAR,
+		posters,
 		onfinished,
 		onready
 	}: {
@@ -35,6 +36,9 @@
 		/** Viewport aspect ratio (w/h), reactive — drives object-fit so the card
 		 *  re-letterboxes on rotate/resize, not just at load. */
 		viewportAR: number;
+		/** Generated posters available (DATA_DIR on, 0.5) — gate the `/api/poster`
+		 *  request so a disabled instance makes none. */
+		posters: boolean;
 		onfinished: () => void;
 		/** Fired when THIS card (while active) reaches `playing` — Feed uses it to
 		 *  release the readiness gate so neighbours may start preloading (0.4). */
@@ -67,16 +71,30 @@
 	// stale no-ops, so a scrolled-past / unmounted card never replays its decode
 	// on top of the next card's startup.
 	let playGen = 0;
-	// Intrinsic video dimensions (set once metadata loads); fit derives from these.
+	// Intrinsic video dimensions: measured from the element on loadedmetadata, but
+	// SEEDED from the manifest (item.width/height, 0.5/M2) until then — so object-
+	// fit is correct on first paint and never JUMPS when metadata arrives. Measured
+	// dims win once present (authoritative).
 	let vw = $state(0);
 	let vh = $state(0);
+	const fitW = $derived(vw || item.width || 0);
+	const fitH = $derived(vh || item.height || 0);
+
+	// Poster (0.5/M3): a generated thumbnail shown in the placeholder until the
+	// video reveals. Only requested when the feature is on (`posters`); `posterOk`
+	// gates display to a SUCCESSFUL load, so a 204 (no poster yet) or error simply
+	// leaves the gradient — no broken-image flash.
+	let posterOk = $state(false);
+	const posterUrl = $derived(
+		posters ? `/api/poster/${encodeURIComponent(item.name)}?v=${item.mtime}` : undefined
+	);
 
 	const showPlay = $derived(active && (blocked || paused));
 	const showSpinner = $derived(active && buffering && !showPlay);
 
 	// Reactive on viewportAR, so rotating/resizing re-letterboxes. Decision logic
 	// lives in the pure `pickFit` (guarded by tests/fit.test.ts).
-	const fit = $derived(pickFit(vw, vh, viewportAR));
+	const fit = $derived(pickFit(fitW, fitH, viewportAR));
 
 	// Seek bar (active card only). currentTime/duration are two-way/readonly media
 	// bindings; dragging sets currentTime, which issues a fresh Range request —
@@ -260,6 +278,17 @@
 
 	{#if !hasPlayed}
 		<div class="placeholder">
+			{#if posterUrl}
+				<img
+					class="poster"
+					class:shown={posterOk}
+					class:contain={fit === 'contain'}
+					src={posterUrl}
+					alt=""
+					onload={() => (posterOk = true)}
+					onerror={() => (posterOk = false)}
+				/>
+			{/if}
 			<span class="caption">{item.name}</span>
 		</div>
 	{/if}
@@ -339,10 +368,32 @@
 		background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
 	}
 
+	/* Generated poster (0.5/M3): covers the gradient once it loads. Hidden until a
+	   successful load (`.shown`), so a 204/error never flashes a broken image.
+	   Matches the video's letterbox decision via `.contain`. */
+	.poster {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		opacity: 0;
+		transition: opacity 0.2s ease;
+	}
+
+	.poster.contain {
+		object-fit: contain;
+	}
+
+	.poster.shown {
+		opacity: 1;
+	}
+
 	.caption {
 		font-size: 0.85rem;
 		opacity: 0.55;
 		word-break: break-word;
+		position: relative;
 	}
 
 	.tap {

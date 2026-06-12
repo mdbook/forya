@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { config } from '$lib/server/config';
 import { scanVideos, seededShuffle } from '$lib/server/videos';
+import { enrichItems } from '$lib/server/probe';
 
 // GET /api/feed → { feed, items: [...] } (SPEC §3).
 // Default order is mtime-desc (from the scan). `?shuffle=1&seed=N` returns a
@@ -29,5 +30,12 @@ export const GET: RequestHandler = async ({ url }) => {
 		page = ordered.slice(offset, end);
 	}
 
-	return json({ feed: config.feedName, items: page }, { headers: { 'cache-control': 'no-cache' } });
+	// Additive metadata enrichment on the returned page only (0.5/M2); identity
+	// when DATA_DIR is off, so the response is byte-identical without the feature.
+	const enriched = await enrichItems(page);
+
+	return json(
+		{ feed: config.feedName, items: enriched },
+		{ headers: { 'cache-control': 'no-cache' } }
+	);
 };

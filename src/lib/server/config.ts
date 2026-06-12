@@ -38,6 +38,12 @@ export const config = {
 	/** Initial value for the client's autoplay-next preference (advance to the
 	 *  next card when a video ends, instead of looping). Client can toggle. */
 	autoAdvance: parseBool(env.AUTO_ADVANCE, false),
+	/** Optional writable dir forya OWNS for its generated poster/metadata cache
+	 *  (0.5). Empty/unset = the feature is OFF: no ffmpeg/ffprobe ever spawns and
+	 *  nothing is written anywhere, so the response surface is byte-identical to a
+	 *  build without it (the source `VIDEO_DIR` stays `:ro` regardless). Set = forya
+	 *  generates + caches posters/metadata under here, writing ONLY here. */
+	dataDir: env.DATA_DIR ?? '',
 	// PORT/HOST are consumed natively by adapter-node at startup; surfaced here
 	// for completeness and any app-level use.
 	port: parseInt10(env.PORT, 3000),

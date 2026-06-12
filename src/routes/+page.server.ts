@@ -1,6 +1,7 @@
 import type { PageServerLoad } from './$types';
 import { config } from '$lib/server/config';
 import { scanVideos, seededShuffle } from '$lib/server/videos';
+import { enrichItems } from '$lib/server/probe';
 
 // First page of the feed, sized so a huge directory doesn't inline a multi-MB
 // manifest into the SSR payload (0.3.1 — the dominant mobile load cost). The
@@ -25,12 +26,15 @@ export const load: PageServerLoad = async () => {
 		feed: config.feedName,
 		seed,
 		total: shuffled.length,
-		items: shuffled.slice(0, FIRST_PAGE),
+		// Enrich only the page we send (bounded, cache-read-only); identity when
+		// DATA_DIR is off, so the payload stays byte-identical (0.5/M2).
+		items: await enrichItems(shuffled.slice(0, FIRST_PAGE)),
 		settings: {
 			allowHide: config.allowHide,
 			preloadAhead: config.preloadAhead,
 			preloadBehind: config.preloadBehind,
-			autoAdvance: config.autoAdvance
+			autoAdvance: config.autoAdvance,
+			posters: config.dataDir !== ''
 		}
 	};
 };
