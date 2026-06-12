@@ -37,6 +37,12 @@ rollback.
 - **adapter-node, not adapter-static.** One Node process serves UI + bytes. The
   runtime Docker stage **must** copy `node_modules` (adapter-node needs them);
   don't "optimize" that away. Runs non-root (`USER node`).
+- **Healthchecks/probes must target `127.0.0.1`, not `localhost`.** The runtime
+  image has busybox `wget`, so a compose healthcheck can use it — but busybox
+  resolves `localhost` to `::1` (IPv6) first, while adapter-node binds IPv4
+  `0.0.0.0` only, so `wget http://localhost:3000/api/healthz` gets connection
+  refused _inside the container_. Use `http://127.0.0.1:3000/api/healthz`. (Same
+  trap for any IPv6-preferring probe client.)
 - **`config.ts` reads `process.env`, not `$env/dynamic/private`.** With
   adapter-node, `process.env` _is_ the runtime source that `$env/dynamic/private`
   proxies — equivalent at runtime, still read-at-runtime (not baked at build).
