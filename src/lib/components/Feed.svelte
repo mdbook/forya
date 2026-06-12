@@ -4,14 +4,11 @@
 	// pauses — only one video plays at a time. Layout is 100dvh/100svh scroll-snap
 	// (dynamic units only, never the static one) via app.css. Desktop fallback:
 	// Up/Down + j/k move snap points, Space play/pause, m mute.
-	import { onMount, untrack } from 'svelte';
+	import { onMount } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import VideoCard from './VideoCard.svelte';
-	import MuteToggle from './MuteToggle.svelte';
 	import ActionRail from './ActionRail.svelte';
 	import Undo2 from '@lucide/svelte/icons/undo-2';
-	import Repeat from '@lucide/svelte/icons/repeat';
-	import SkipForward from '@lucide/svelte/icons/skip-forward';
 	import type { FeedItem, FeedSettings } from '$lib/types';
 	import {
 		loadMute,
@@ -21,7 +18,7 @@
 		loadAutoAdvance,
 		saveAutoAdvance
 	} from '$lib/stores/prefs';
-	import { loadSeen, saveSeen } from '$lib/stores/seen';
+	import { unlockPlayback } from '$lib/stores/playback.svelte';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
 
 	let {
@@ -36,6 +33,15 @@
 	let feedEl = $state<HTMLElement>();
 	let cardEls = $state<HTMLElement[]>([]);
 	let io: IntersectionObserver | undefined;
+	// Viewport aspect (w/h), kept current so cards re-fit on rotate/resize. The
+	// card fills the feed cell (full width × 100dvh), so window AR ≈ card AR.
+	let viewportAR = $state(1);
+
+	function readViewport() {
+		if (typeof window !== 'undefined' && window.innerHeight > 0) {
+			viewportAR = window.innerWidth / window.innerHeight;
+		}
+	}
 
 	// Hidden ("trashed") set — client-side only, reactive (SvelteSet) so the
 	// `visible` derived recomputes on mutate. `visible` is what the feed actually
@@ -44,6 +50,10 @@
 	const hidden = new SvelteSet<string>();
 	let lastHidden = $state<string | null>(null);
 	let undoTimer: ReturnType<typeof setTimeout> | undefined;
+	// Transient confirmation of the loop/next mode after a toggle (reuses the
+	// undo-toast styling). Null when no toast is showing.
+	let modeToast = $state<string | null>(null);
+	let modeTimer: ReturnType<typeof setTimeout> | undefined;
 	let infoOpen = $state(false);
 	// Initial value is set from settings (or the stored pref) in onMount; the
 	// literal here is just the pre-hydration placeholder (no video has ended yet).
@@ -53,6 +63,9 @@
 
 	function toggleAutoAdvance() {
 		autoAdvance = !autoAdvance;
+		modeToast = autoAdvance ? 'Autoplay next: on' : 'Loop: on';
+		clearTimeout(modeTimer);
+		modeTimer = setTimeout(() => (modeToast = null), 2000);
 	}
 
 	/** Share the active video via the iOS share sheet, or fall back to a direct
@@ -137,6 +150,7 @@
 
 	function toggleMute() {
 		muted = !muted;
+		unlockPlayback(); // a tap is a real user gesture
 		// First-tap audio unlock: flip the live video inside the user gesture.
 		const v = activeVideo();
 		if (v) {
@@ -148,6 +162,7 @@
 	function togglePlayActive() {
 		const v = activeVideo();
 		if (!v) return;
+		unlockPlayback(); // keyboard play is a gesture too
 		if (v.paused) v.play().catch(() => {});
 		else v.pause();
 	}
@@ -175,16 +190,15 @@
 	}
 
 	onMount(() => {
+		readViewport();
 		muted = loadMute(feedName);
 		infoOpen = loadInfo(feedName);
 		autoAdvance = loadAutoAdvance(feedName, settings.autoAdvance);
 		for (const n of loadHidden(feedName)) hidden.add(n);
 
-		const resume = loadSeen(feedName);
-		if (resume && resume.index > 0 && resume.index < untrack(() => visible.length)) {
-			activeIndex = resume.index;
-			cardEls[resume.index]?.scrollIntoView();
-		}
+		// No resume-to-index: the feed order is randomized server-side per load
+		// (0.3.0), so a saved index would point at a different clip each visit —
+		// resume was removed rather than silently mislead. Always start at the top.
 
 		// THE single IntersectionObserver — the only one in the app.
 		io = new IntersectionObserver(
@@ -229,16 +243,9 @@
 	$effect(() => {
 		saveAutoAdvance(feedName, autoAdvance);
 	});
-
-	$effect(() => {
-		saveSeen(feedName, {
-			index: activeIndex,
-			names: visible.slice(0, activeIndex + 1).map((i) => i.name)
-		});
-	});
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} onresize={readViewport} onorientationchange={readViewport} />
 
 {#if visible.length === 0}
 	<div class="empty">
@@ -257,27 +264,19 @@
 					preload={ws.preload}
 					{muted}
 					{autoAdvance}
+					{viewportAR}
 					onfinished={() => scrollTo(activeIndex + 1)}
 				/>
 			</div>
 		{/each}
 	</div>
-	<MuteToggle {muted} ontoggle={toggleMute} />
-	<button
-		class="advance-toggle"
-		onclick={toggleAutoAdvance}
-		aria-label={autoAdvance ? 'Autoplay next is on' : 'Loop is on'}
-		aria-pressed={autoAdvance}
-	>
-		{#if autoAdvance}
-			<SkipForward size={20} aria-hidden="true" />
-		{:else}
-			<Repeat size={20} aria-hidden="true" />
-		{/if}
-	</button>
 	<ActionRail
+		{muted}
+		{autoAdvance}
 		allowHide={settings.allowHide}
 		{infoOpen}
+		onmute={toggleMute}
+		onautoadvance={toggleAutoAdvance}
 		onshare={() => share(activeItem)}
 		oninfo={toggleInfo}
 		onhide={() => hide(activeItem?.name)}
@@ -300,6 +299,10 @@
 	</div>
 {/if}
 
+{#if modeToast}
+	<div class="mode-toast" role="status">{modeToast}</div>
+{/if}
+
 <style>
 	.empty {
 		display: flex;
@@ -315,29 +318,6 @@
 	.empty .hint {
 		opacity: 0.5;
 		font-size: 0.85rem;
-	}
-
-	.advance-toggle {
-		position: fixed;
-		top: calc(env(safe-area-inset-top) + 0.75rem);
-		left: calc(env(safe-area-inset-left) + 0.75rem);
-		z-index: 10;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 2.75rem;
-		height: 2.75rem;
-		padding: 0;
-		color: #fff;
-		background: rgba(0, 0, 0, 0.4);
-		border: 1px solid rgba(255, 255, 255, 0.15);
-		border-radius: 50%;
-		cursor: pointer;
-		backdrop-filter: blur(8px);
-	}
-
-	.advance-toggle:active {
-		transform: scale(0.92);
 	}
 
 	.info-overlay {
@@ -400,5 +380,21 @@
 
 	.undo-btn:active {
 		transform: scale(0.95);
+	}
+
+	.mode-toast {
+		position: fixed;
+		left: 50%;
+		bottom: calc(env(safe-area-inset-bottom) + 4.75rem);
+		z-index: 20;
+		transform: translateX(-50%);
+		padding: 0.5rem 1rem;
+		color: #fff;
+		white-space: nowrap;
+		background: rgba(0, 0, 0, 0.7);
+		border: 1px solid rgba(255, 255, 255, 0.15);
+		border-radius: 999px;
+		backdrop-filter: blur(8px);
+		font-size: 0.9rem;
 	}
 </style>

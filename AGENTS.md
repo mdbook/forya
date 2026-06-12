@@ -88,3 +88,11 @@ build`), `check` (svelte-check), `lint` (eslint), `format` / `format:check`
 - **iOS feed techniques are load-bearing** (see `handoff.md`): `muted` +
   `playsinline`, `100dvh`/`100svh` (never `100vh`), a single IntersectionObserver
   playing one video at a time. `grep -rn '100vh' src` must stay empty.
+- **The page feed is randomized and has no resume (intentional, 0.3.0).** The
+  `/` page shuffles the scan with a fresh server-side seed per request, so order
+  changes every load and there is no resume-to-last-index. This is a deliberate
+  deviation from the SPEC §4 resume behaviour and the §3 mtime-desc page default
+  — don't "restore" resume thinking it regressed. `/api/feed` is unchanged
+  (mtime-desc default, opt-in `?shuffle`); only the page default differs. The
+  shuffle reuses `seededShuffle` from `videos.ts` by import — it does **not**
+  modify the serving layer.

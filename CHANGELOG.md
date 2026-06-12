@@ -4,6 +4,41 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.3.0 — randomized feed + control consolidation + autoplay polish
+
+Feed-UI/player batch from operator feedback after 0.2.0 went live. Entirely
+client/UI + page-load order — the serving layer (Range resolver, media route,
+server config) is byte-unchanged.
+
+### Frontend
+
+- **Randomized feed (default on)**: the page feed is now shuffled server-side
+  with a fresh seed per request, so every refresh yields a new order. SSR'd, so
+  no reorder flash; server stays stateless. The `/api/feed` endpoint keeps its
+  mtime-desc default and opt-in `?shuffle=1&seed=N` — only the page default
+  changed. **Resume-to-last-index was removed** (a saved index is meaningless
+  when the order reshuffles each load) — an intentional change from the SPEC §4
+  resume behaviour and the §3 mtime-desc page default.
+- **One control rail**: mute, loop/next, share, info, and hide now all live on a
+  single right-side rail (previously split across the corners). The loop/next
+  button shows the **current mode as a label** ("Loop" / "Next") plus a lit
+  active state, with a brief confirmation toast on toggle.
+- **Landscape fit**: object-fit is now symmetric — a portrait clip on a
+  landscape display letterboxes instead of showing only its middle third (fixes
+  the inverse of the 0.2.0 one-directional crop). Pure `pickFit`, guarded by
+  `fit.test`; portrait-on-portrait still fills edge-to-edge.
+- **Autoplay / first-frame polish**: the buffering spinner and the manual play
+  button are now mutually exclusive (no more spinner behind the play glyph); a
+  first-frame nudge coaxes a poster frame so a scrolled-to card never shows
+  blank black; a session "playback unlocked" flag retries a transiently-rejected
+  play instead of re-prompting. Muted autoplay-on-load stays gesture-free
+  (criterion 3). _iOS-specific tuning verified on-device by the operator._
+- **Share icon** swapped to the more visually-centered `share` glyph.
+
+### Config
+
+- No new env vars (clean watchtower swap — no recreate needed).
+
 ## 0.2.0 — feed UX + curation
 
 Feature batch over the 0.1.0 base. All client-side except an additive caching
