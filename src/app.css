@@ -1,5 +1,7 @@
-/* Global base. The load-bearing iOS scroll-snap layout (.feed / .card with
-   100dvh/100svh + safe-area insets) lands in milestone 03 — SPEC §4. */
+/* Global base + the load-bearing iOS scroll-snap layout (SPEC §4).
+   The feed and cards size with 100svh THEN 100dvh — never the legacy static
+   viewport-height unit, which is erin's central bug (it ignores Safari's
+   dynamic toolbar). */
 
 *,
 *::before,
@@ -20,4 +22,31 @@ body {
 body {
 	-webkit-font-smoothing: antialiased;
 	overscroll-behavior: none;
+}
+
+/* Vertical scroll-snap feed. 100svh first, 100dvh second: browsers that
+   support dvh use the dynamic-toolbar-aware height; older ones fall back to
+   svh. Either way, dynamic units only — never the static viewport unit. */
+.feed {
+	height: 100svh;
+	height: 100dvh;
+	overflow-y: scroll;
+	scroll-snap-type: y mandatory;
+	overscroll-behavior: contain;
+	-webkit-overflow-scrolling: touch;
+	scrollbar-width: none;
+}
+
+.feed::-webkit-scrollbar {
+	display: none;
+}
+
+.card {
+	position: relative;
+	height: 100svh;
+	height: 100dvh;
+	scroll-snap-align: start;
+	scroll-snap-stop: always;
+	padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+		env(safe-area-inset-left);
 }

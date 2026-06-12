@@ -1,30 +1,14 @@
-<!-- Placeholder home page. The real iOS vertical feed lands in milestone 03. -->
-<main>
-	<h1>forya</h1>
-	<p>Vertical video feed — scaffold. Feed UI arrives in milestone 03.</p>
-</main>
+<script lang="ts">
+	import Feed from '$lib/components/Feed.svelte';
+	import type { PageData } from './$types';
 
-<style>
-	main {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-		align-items: center;
-		justify-content: center;
-		height: 100dvh;
-		text-align: center;
-		padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
-			env(safe-area-inset-left);
-	}
+	let { data }: { data: PageData } = $props();
+</script>
 
-	h1 {
-		margin: 0;
-		font-size: 2rem;
-		letter-spacing: 0.05em;
-	}
+<svelte:head>
+	<title>{data.feed}</title>
+	<!-- Per-instance home-screen name (FEED_NAME) for iOS add-to-home-screen. -->
+	<meta name="apple-mobile-web-app-title" content={data.feed} />
+</svelte:head>
 
-	p {
-		margin: 0;
-		opacity: 0.6;
-	}
-</style>
+<Feed items={data.items} feedName={data.feed} />
