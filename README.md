@@ -35,7 +35,8 @@ serving backend. See [`handoff.md`](./handoff.md) for the full story.
   scroll-snap (never `100vh`), one video playing at a time, tap-to-play
   fallback.
 - **Randomized order**: the feed is shuffled fresh on every page load (server-
-  side, so no reorder flash).
+  side, so no reorder flash). Large feeds load a slim first page and lazy-load
+  the rest as you scroll, continuing the same shuffled order.
 - **Windowed lazy-loading**: only a small window around the active card holds a
   decoder; buffers ahead, caches recent, reloads on back-scroll.
 - **Adaptive fit**: off-aspect clips letterbox instead of cropping — in either
@@ -84,7 +85,7 @@ what the `/api/feed` endpoint still returns by default.
 ### Endpoints
 
 - `GET /` — the feed UI.
-- `GET /api/feed` — JSON manifest: `{ feed, items: [{ name, url, size, mtime, type }] }`. `?shuffle=1&seed=N` for a deterministic shuffle.
+- `GET /api/feed` — JSON manifest: `{ feed, items: [{ name, url, size, mtime, type }] }`. `?shuffle=1&seed=N` for a deterministic shuffle; `?offset=O&limit=L` to paginate (used by the page's lazy-load). No params → the full mtime-desc list.
 - `GET|HEAD /api/media/<name>` — the video bytes, with full Range support.
 - `GET /api/healthz` — `200 ok` (healthcheck).
 - `GET /manifest.webmanifest` — the PWA manifest, branded with `FEED_NAME`.

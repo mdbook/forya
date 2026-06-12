@@ -11,4 +11,10 @@
 	<meta name="apple-mobile-web-app-title" content={data.feed} />
 </svelte:head>
 
-<Feed items={data.items} feedName={data.feed} settings={data.settings} />
+<Feed
+	items={data.items}
+	feedName={data.feed}
+	settings={data.settings}
+	total={data.total}
+	seed={data.seed}
+/>

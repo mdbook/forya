@@ -4,16 +4,22 @@
 	// a reactive `preload`. Play/pause is driven by the `active` prop from the
 	// single IntersectionObserver in Feed.svelte — this card never observes
 	// intersection itself, so only one video plays at a time.
+	//
+	// As of 0.3.1, Feed only MOUNTS this component for cards inside the lazy-load
+	// window (off-window cards render a cheap placeholder) — so a mounted card
+	// always carries a real `<video src>`. Leaving the window unmounts the
+	// component, which removes the <video> and releases the iOS decoder; the
+	// onDestroy teardown makes that release explicit. This supersedes the 0.3.0
+	// in-component src/decoder hysteresis.
 	import { onDestroy, untrack } from 'svelte';
 	import Play from '@lucide/svelte/icons/play';
 	import { pickFit } from '$lib/fit';
-	import { playback, unlockPlayback } from '$lib/stores/playback.svelte';
+	import { unlockPlayback } from '$lib/stores/playback.svelte';
 	import type { FeedItem } from '$lib/types';
 
 	let {
 		item,
 		active,
-		live,
 		preload,
 		muted,
 		autoAdvance,
@@ -22,10 +28,6 @@
 	}: {
 		item: FeedItem;
 		active: boolean;
-		/** Inside the lazy-load window → carries a real `<video src>`. Outside →
-		 *  srcless placeholder (decoder released). The active card is ALWAYS live
-		 *  (Feed guarantees it), so it can always play. */
-		live: boolean;
 		preload: 'auto' | 'metadata' | 'none';
 		muted: boolean;
 		/** Advance to the next card on end instead of looping. */
@@ -37,7 +39,13 @@
 	} = $props();
 
 	let el = $state<HTMLVideoElement>();
-	let loaded = $state(false);
+	// `hasPlayed` gates the REVEAL (0.3.1): the <video> only becomes visible once
+	// it has actually reached `playing` and painted a frame. Until then the
+	// gradient placeholder shows — so a blocked / pre-gesture / still-buffering
+	// card never flashes a black <video> (the nudge that used to force a poster
+	// frame is gone). A user-paused card keeps hasPlayed=true, so it shows its
+	// real painted frame, not the placeholder.
+	let hasPlayed = $state(false);
 	let buffering = $state(false);
 	// `blocked`: autoplay was attempted and rejected (no gesture yet). `paused`:
 	// the user tapped to pause. The manual play affordance shows for EITHER — and
@@ -50,15 +58,8 @@
 	let vw = $state(0);
 	let vh = $state(0);
 
-	// `src` lags the `live` window by a short hysteresis so a small back-scroll
-	// (past a card then straight back) doesn't drop and reload it → blank frame.
-	// The active card is always live, so it never enters the release path.
-	let srcLive = $state(false);
-	let releaseTimer: ReturnType<typeof setTimeout> | undefined;
-	const RELEASE_DELAY_MS = 1200;
-
 	const showPlay = $derived(active && (blocked || paused));
-	const showSpinner = $derived(active && buffering && loaded && !showPlay);
+	const showSpinner = $derived(active && buffering && !showPlay);
 
 	// Reactive on viewportAR, so rotating/resizing re-letterboxes. Decision logic
 	// lives in the pure `pickFit` (guarded by tests/fit.test.ts).
@@ -112,35 +113,23 @@
 	function readDimensions(v: HTMLVideoElement) {
 		vw = v.videoWidth;
 		vh = v.videoHeight;
-		// Coax iOS into decoding/painting a poster frame even while paused/pre-
-		// gesture, so a scrolled-to (or autoplay-blocked) card shows its first
-		// frame instead of blank black. Best-effort — ignored if not yet seekable.
-		if (v.paused && v.currentTime === 0) {
-			try {
-				v.currentTime = Math.min(0.05, (v.duration || 1) / 2);
-			} catch {
-				/* not seekable yet — harmless */
-			}
-		}
 	}
 
 	function tryPlay(v: HTMLVideoElement) {
 		// Muted autoplay is gesture-free (SPEC §4, criterion 3): we ALWAYS attempt
-		// it regardless of unlock state. `playback.unlocked` only decides whether a
-		// transient rejection is retried silently vs surfaced as a play button.
+		// it. A scrolled-to / freshly-mounted active card can transiently reject
+		// before it's ready, so on rejection we retry ONCE on the next frame —
+		// still muted+playsinline, NOT gated on playback.unlocked. Only if the
+		// retry also fails do we surface the manual play button (`blocked`).
 		v.muted = muted;
 		const p = v.play();
 		if (p && typeof p.then === 'function') {
 			p.then(() => (blocked = false)).catch(() => {
-				if (playback.unlocked) {
-					requestAnimationFrame(() => {
-						v.play()
-							.then(() => (blocked = false))
-							.catch(() => (blocked = true));
-					});
-				} else {
-					blocked = true;
-				}
+				requestAnimationFrame(() => {
+					v.play()
+						.then(() => (blocked = false))
+						.catch(() => (blocked = true));
+				});
 			});
 		}
 	}
@@ -163,37 +152,16 @@
 		if (v) v.muted = muted;
 	});
 
-	// Hysteresis: bring `src` in immediately when the card enters the window; on
-	// leaving, hold it RELEASE_DELAY_MS before dropping (cancelled if it re-enters
-	// first). Depends only on `live` — the srcLive read is untracked to avoid a
-	// self-triggering loop.
-	$effect(() => {
-		const isLive = live;
-		untrack(() => {
-			clearTimeout(releaseTimer);
-			if (isLive) {
-				srcLive = true;
-			} else if (srcLive) {
-				releaseTimer = setTimeout(() => (srcLive = false), RELEASE_DELAY_MS);
-			}
-		});
-	});
-
-	// Once `src` is actually gone (srcLive false → the declarative attr is already
-	// removed), load() resets the element to empty and frees the iOS decoder.
-	// Reset overlay state so the placeholder returns; re-entering rebinds + reloads.
-	// The active card never hits this (always live → always srcLive).
-	$effect(() => {
+	// Explicit decoder release on unmount: when the card leaves the window Feed
+	// unmounts this component, so detach the source and load() to free the iOS
+	// decoder deterministically rather than waiting on GC.
+	onDestroy(() => {
 		const v = el;
-		if (!v || srcLive) return;
-		untrack(() => v.load());
-		loaded = false;
-		blocked = false;
-		buffering = false;
-		paused = false;
+		if (!v) return;
+		v.pause();
+		v.removeAttribute('src');
+		v.load();
 	});
-
-	onDestroy(() => clearTimeout(releaseTimer));
 
 	function togglePlay() {
 		const v = el;
@@ -215,15 +183,14 @@
 		bind:this={el}
 		bind:currentTime
 		bind:duration
-		src={srcLive ? item.url : undefined}
+		src={item.url}
 		{preload}
 		muted
 		playsinline
 		loop={!autoAdvance}
-		class:loaded
+		class:revealed={hasPlayed}
 		class:contain={fit === 'contain'}
 		onloadedmetadata={() => readDimensions(el!)}
-		onloadeddata={() => (loaded = true)}
 		onended={() => {
 			if (active && autoAdvance) onfinished();
 		}}
@@ -233,12 +200,13 @@
 			blocked = false;
 		}}
 		onplaying={() => {
+			hasPlayed = true;
 			buffering = false;
 			blocked = false;
 		}}
 	></video>
 
-	{#if !loaded}
+	{#if !hasPlayed}
 		<div class="placeholder">
 			<span class="caption">{item.name}</span>
 		</div>
@@ -300,7 +268,7 @@
 		transition: opacity 0.25s ease;
 	}
 
-	video.loaded {
+	video.revealed {
 		opacity: 1;
 	}
 

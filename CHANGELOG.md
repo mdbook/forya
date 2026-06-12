@@ -4,6 +4,42 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.3.1 — regression hotfix (black screen, scroll autoplay, slow load)
+
+Hotfix for regressions the operator's on-device iPhone smoke found in 0.3.0.
+Entirely frontend / page-load — the serving layer (Range resolver, media route,
+server config) is byte-unchanged.
+
+### Fixed
+
+- **Black screen on large feeds** (liked/favorite, 8k–12k files): the feed used
+  to mount a full `<video>` component for _every_ item; now only the cards inside
+  the lazy-load window mount a player (off-window cards are a cheap placeholder),
+  capping live decoders regardless of feed size. Removed the 0.3.0 first-frame
+  `currentTime` nudge (which painted a black frame under memory pressure) in
+  favour of a **reveal-gate**: the `<video>` only becomes visible once it has
+  actually started playing, so a blocked/pre-play card shows the placeholder, not
+  black.
+- **Scroll-to-next autoplay** (best): a freshly-active card now retries its muted
+  autoplay once on rejection (still gesture-free — not gated on the unlock flag),
+  so scrolling reliably autoplays instead of needing a manual tap.
+
+### Changed
+
+- **Slimmer first load**: the page no longer inlines the entire manifest into the
+  SSR payload (6.7MB for liked). It sends a small first page plus the shuffle
+  `seed` + `total`; the client lazy-loads the rest via `/api/feed` threading the
+  same seed, so the randomized order continues with no dupes/re-shuffle.
+- `/api/feed` gains additive `offset` / `limit` params (the no-param default
+  contract — full mtime-desc list — is unchanged).
+
+### Notes
+
+- No new env vars (clean watchtower swap).
+- The pre-existing cold directory-scan cost (~9s on the largest feed) is **not**
+  addressed here; a persistent/longer-memo scan is queued as **0.3.2** (a
+  serving-layer change with a full Range re-gate).
+
 ## 0.3.0 — randomized feed + control consolidation + autoplay polish
 
 Feed-UI/player batch from operator feedback after 0.2.0 went live. Entirely
