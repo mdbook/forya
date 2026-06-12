@@ -3,18 +3,44 @@
 	// Single instance (not per-card) — Feed wires the handlers to the active item.
 	// Sits clear of the full-bleed tap-to-play target and the SPEC-reserved
 	// double-tap-to-like gesture (these are buttons on a rail, not gestures).
+	import Share2 from '@lucide/svelte/icons/share-2';
+	import Info from '@lucide/svelte/icons/info';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
-	let { allowHide, onhide }: { allowHide: boolean; onhide: () => void } = $props();
+	let {
+		allowHide,
+		infoOpen,
+		onshare,
+		oninfo,
+		onhide
+	}: {
+		allowHide: boolean;
+		infoOpen: boolean;
+		onshare: () => void;
+		oninfo: () => void;
+		onhide: () => void;
+	} = $props();
 </script>
 
-{#if allowHide}
-	<div class="rail">
+<div class="rail">
+	<button class="rail-btn" onclick={onshare} aria-label="Share or save this video">
+		<Share2 size={24} aria-hidden="true" />
+	</button>
+	<button
+		class="rail-btn"
+		class:on={infoOpen}
+		onclick={oninfo}
+		aria-label="Toggle video info"
+		aria-pressed={infoOpen}
+	>
+		<Info size={24} aria-hidden="true" />
+	</button>
+	{#if allowHide}
 		<button class="rail-btn" onclick={onhide} aria-label="Hide this video from the feed">
 			<Trash2 size={24} aria-hidden="true" />
 		</button>
-	</div>
-{/if}
+	{/if}
+</div>
 
 <style>
 	.rail {
@@ -40,6 +66,11 @@
 		border-radius: 50%;
 		cursor: pointer;
 		backdrop-filter: blur(8px);
+	}
+
+	.rail-btn.on {
+		background: rgba(255, 255, 255, 0.85);
+		color: #000;
 	}
 
 	.rail-btn:active {

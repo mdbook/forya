@@ -11,7 +11,7 @@
 	import ActionRail from './ActionRail.svelte';
 	import Undo2 from '@lucide/svelte/icons/undo-2';
 	import type { FeedItem, FeedSettings } from '$lib/types';
-	import { loadMute, saveMute } from '$lib/stores/prefs';
+	import { loadMute, saveMute, loadInfo, saveInfo } from '$lib/stores/prefs';
 	import { loadSeen, saveSeen } from '$lib/stores/seen';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
 
@@ -35,8 +35,40 @@
 	const hidden = new SvelteSet<string>();
 	let lastHidden = $state<string | null>(null);
 	let undoTimer: ReturnType<typeof setTimeout> | undefined;
+	let infoOpen = $state(false);
 	const visible = $derived(applyHidden(items, hidden));
 	const activeItem = $derived(visible[activeIndex]);
+
+	/** Share the active video via the iOS share sheet, or fall back to a direct
+	 *  download when the Web Share API is unavailable (desktop). */
+	function share(item: FeedItem | undefined) {
+		if (!item) return;
+		const url = new URL(item.url, location.origin).href;
+		if (navigator.share) {
+			navigator.share({ title: item.name, url }).catch(() => {});
+			return;
+		}
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = item.name;
+		a.click();
+	}
+
+	function toggleInfo() {
+		infoOpen = !infoOpen;
+	}
+
+	function formatBytes(n: number): string {
+		if (n < 1024) return `${n} B`;
+		const units = ['KB', 'MB', 'GB'];
+		let v = n / 1024;
+		let i = 0;
+		while (v >= 1024 && i < units.length - 1) {
+			v /= 1024;
+			i++;
+		}
+		return `${v.toFixed(1)} ${units[i]}`;
+	}
 
 	function hide(name: string | undefined) {
 		if (!name) return;
@@ -128,6 +160,7 @@
 
 	onMount(() => {
 		muted = loadMute(feedName);
+		infoOpen = loadInfo(feedName);
 		for (const n of loadHidden(feedName)) hidden.add(n);
 
 		const resume = loadSeen(feedName);
@@ -173,6 +206,10 @@
 	});
 
 	$effect(() => {
+		saveInfo(feedName, infoOpen);
+	});
+
+	$effect(() => {
 		saveSeen(feedName, {
 			index: activeIndex,
 			names: visible.slice(0, activeIndex + 1).map((i) => i.name)
@@ -197,7 +234,19 @@
 		{/each}
 	</div>
 	<MuteToggle {muted} ontoggle={toggleMute} />
-	<ActionRail allowHide={settings.allowHide} onhide={() => hide(activeItem?.name)} />
+	<ActionRail
+		allowHide={settings.allowHide}
+		{infoOpen}
+		onshare={() => share(activeItem)}
+		oninfo={toggleInfo}
+		onhide={() => hide(activeItem?.name)}
+	/>
+	{#if infoOpen && activeItem}
+		<div class="info-overlay">
+			<p class="info-name">{activeItem.name}</p>
+			<p class="info-meta">{formatBytes(activeItem.size)} · {activeItem.type}</p>
+		</div>
+	{/if}
 {/if}
 
 {#if lastHidden}
@@ -225,6 +274,32 @@
 	.empty .hint {
 		opacity: 0.5;
 		font-size: 0.85rem;
+	}
+
+	.info-overlay {
+		position: fixed;
+		left: calc(env(safe-area-inset-left) + 0.75rem);
+		bottom: calc(env(safe-area-inset-bottom) + 2.5rem);
+		z-index: 9;
+		max-width: 70vw;
+		padding: 0.5rem 0.75rem;
+		background: rgba(0, 0, 0, 0.55);
+		border-radius: 0.5rem;
+		backdrop-filter: blur(8px);
+		pointer-events: none;
+	}
+
+	.info-name {
+		margin: 0;
+		font-size: 0.85rem;
+		font-weight: 600;
+		word-break: break-word;
+	}
+
+	.info-meta {
+		margin: 0.15rem 0 0;
+		font-size: 0.75rem;
+		opacity: 0.65;
 	}
 
 	.undo-toast {
