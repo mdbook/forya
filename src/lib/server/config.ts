@@ -31,9 +31,10 @@ export const config = {
 	 *  holds. Default OFF: instances opt in per-deployment. */
 	allowHide: parseBool(env.ALLOW_HIDE, false),
 	/** Lazy-load window: how many cards ahead of / behind the active one carry a
-	 *  real `<video src>` (caps simultaneous iOS decoders). */
-	preloadAhead: parseInt10(env.PRELOAD_AHEAD, 3),
-	preloadBehind: parseInt10(env.PRELOAD_BEHIND, 2),
+	 *  real `<video src>` (caps simultaneous iOS decoders). Clamped ≥ 0 so a
+	 *  nonsensical negative can never shrink the window past the active card. */
+	preloadAhead: Math.max(0, parseInt10(env.PRELOAD_AHEAD, 3)),
+	preloadBehind: Math.max(0, parseInt10(env.PRELOAD_BEHIND, 2)),
 	/** Initial value for the client's autoplay-next preference (advance to the
 	 *  next card when a video ends, instead of looping). Client can toggle. */
 	autoAdvance: parseBool(env.AUTO_ADVANCE, false),
