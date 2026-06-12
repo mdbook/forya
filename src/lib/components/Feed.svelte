@@ -7,11 +7,15 @@
 	import { onMount } from 'svelte';
 	import VideoCard from './VideoCard.svelte';
 	import MuteToggle from './MuteToggle.svelte';
-	import type { FeedItem } from '$lib/types';
+	import type { FeedItem, FeedSettings } from '$lib/types';
 	import { loadMute, saveMute } from '$lib/stores/prefs';
 	import { loadSeen, saveSeen } from '$lib/stores/seen';
 
-	let { items, feedName }: { items: FeedItem[]; feedName: string } = $props();
+	let {
+		items,
+		feedName,
+		settings
+	}: { items: FeedItem[]; feedName: string; settings: FeedSettings } = $props();
 
 	let activeIndex = $state(0);
 	let muted = $state(true);
