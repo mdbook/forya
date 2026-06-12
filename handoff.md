@@ -51,11 +51,29 @@ rollback.
   (couldn't set `VIDEO_DIR`). Reading `process.env` keeps the load-bearing Range
   route fully integration-tested — which is exactly what caught the HEAD trap
   above. Don't "fix" it back to `$env` without solving the test-env problem.
-- **Preload window is one card warmer than the spec's literal wording.**
-  `Feed.preloadFor` returns `metadata` for `[activeIndex-1 .. activeIndex+2]`
-  (the spec says "active + next 1–2"). The extra previous card is a deliberate
-  choice for smooth back-scroll; everything else is `preload="none"` so iOS
-  isn't decoding the whole feed.
+- **The feed is source-virtualized by a windowed loader (0.2.0).**
+  `Feed.windowState` keeps a real `<video src>` only on cards inside a
+  direction-biased window `[active − behind, active + ahead]` (defaults 2/3,
+  tunable via `PRELOAD_BEHIND`/`PRELOAD_AHEAD`); off-window cards are srcless
+  placeholders and `VideoCard` calls `video.load()` on exit to **release the iOS
+  decoder**. The active card (`d === 0`) is _always_ live, so a `j`/`k` jump or
+  fast scroll to any index force-loads and plays it — never a srcless active
+  card. Scrolling up swaps ahead/behind so sustained back-scroll loads the
+  previously-uncached cards. Preload gradient inside the window: active + the
+  immediate neighbour in the travel direction get `auto`, the rest `metadata`.
+  (Superseded the 0.1.0 `preloadFor` "+1 warmer" metadata window.)
+- **Hiding ("trash") is client-side only — `VIDEO_DIR` stays `:ro`.** The hide
+  control (`ALLOW_HIDE`, default off) adds the filename to a per-`FEED_NAME`
+  localStorage set (`stores/hidden.ts`); `Feed` renders through the pure
+  `applyHidden` filter. It **never deletes, moves, or writes** anything — the
+  read-only input contract is intact, no `:rw` remount needed. Reversible via the
+  Undo toast (so no confirm dialog). The hidden set is per-device.
+- **Media responses carry `Cache-Control: private, max-age=3600` (0.2.0).**
+  Additive only — it lets the windowed feed reuse already-fetched bytes on
+  scroll-back without a revalidation round-trip. It does **not** touch the Range
+  branch logic; `private` because instances sit behind per-user forward-auth
+  (never a shared proxy cache). A `range.test` case asserts it doesn't perturb
+  the 206/200/HEAD responses.
 - **One IntersectionObserver, one active video.** `Feed.svelte` owns the only
   IO (threshold ~0.6, root = the scroll container). The entering card becomes
   `activeIndex`; cards receive `active={i === activeIndex}` and play/pause off
@@ -74,6 +92,11 @@ don't fight the browser by decoding many at once. So: both attributes on every
 
 ## Future TODOs (not built in v1)
 
+- **Manage-hidden panel** — hiding (0.2.0) only stashes filenames in
+  per-device localStorage; there's no way to review or restore hides except
+  the transient Undo toast. Planned: an auth-gated panel listing hidden videos
+  with restore, likely backed by server-side persistence (which would be the
+  first piece of app-owned writable state — keep it out of `VIDEO_DIR`).
 - **Multi-feed per instance** — today it's one feed per container
   (`VIDEO_DIR` + `FEED_NAME`); serving several feeds from one instance is a
   future enhancement.

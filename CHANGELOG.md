@@ -4,6 +4,43 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.2.0 — feed UX + curation
+
+Feature batch over the 0.1.0 base. All client-side except an additive caching
+header — the `/srv/videos` read-only contract and the Range contract are
+unchanged.
+
+### Frontend
+
+- **Lucide icons** replace all emoji glyphs (per-icon imports, tree-shaken,
+  bundled at build → still offline-safe).
+- **Hide from feed** ("trash"): per-card control (env-gated `ALLOW_HIDE`,
+  default off) that hides a video client-side (localStorage), with an Undo
+  toast. Never touches disk. _TODO: an auth-gated panel to manage hidden videos._
+- **Windowed lazy-loading**: only a direction-biased window around the active
+  card carries a real `<video src>` (caps simultaneous iOS decoders); the active
+  card is always loaded. Smooth bidirectional scroll — buffers ahead, keeps the
+  last few warm, and reloads previous cards on sustained back-scroll. Tunable via
+  `PRELOAD_AHEAD` / `PRELOAD_BEHIND`.
+- **Share / save** (Web Share API, download fallback), a **seek bar** on the
+  active card (scrub → Range seek), an **autoplay-next** toggle (advance on end
+  vs. loop; `AUTO_ADVANCE` default, persisted), and a **filename/info overlay**
+  toggle — surfaced via a right-side action rail.
+- **Adaptive object-fit**: off-aspect (wider-than-viewport) clips letterbox
+  instead of middle-cropping; portrait content still fills edge-to-edge.
+
+### Backend
+
+- Additive `Cache-Control: private, max-age=3600` on `/api/media/<name>` so the
+  windowed feed reuses bytes on scroll-back. Purely additive — the
+  `206`/`Content-Range`/`416`/HEAD Range contract is byte-identical (guarded by a
+  new `range.test` case).
+
+### Config
+
+- New env: `ALLOW_HIDE`, `PRELOAD_AHEAD` (3), `PRELOAD_BEHIND` (2),
+  `AUTO_ADVANCE` — all optional with documented defaults.
+
 ## 0.1.0 — initial release
 
 First cut: an iOS-first vertical video feed serving UI + video bytes from one
