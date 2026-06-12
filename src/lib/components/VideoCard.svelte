@@ -31,6 +31,51 @@
 	let needsTap = $state(false);
 	let fit = $state<'cover' | 'contain'>('cover');
 
+	// Seek bar (active card only). currentTime/duration are two-way/readonly media
+	// bindings; dragging sets currentTime, which issues a fresh Range request —
+	// the exact seek path erin broke, so this doubles as live Range validation.
+	let currentTime = $state(0);
+	let duration = $state(0);
+	let scrubbing = $state(false);
+	let seekEl = $state<HTMLElement>();
+	const progress = $derived(duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0);
+
+	function seekToClientX(clientX: number) {
+		const r = seekEl?.getBoundingClientRect();
+		if (!r || !r.width || !duration || !el) return;
+		const frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+		el.currentTime = frac * duration;
+	}
+
+	function onSeekPointerDown(e: PointerEvent) {
+		e.stopPropagation();
+		scrubbing = true;
+		(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+		seekToClientX(e.clientX);
+	}
+
+	function onSeekPointerMove(e: PointerEvent) {
+		if (!scrubbing) return;
+		e.stopPropagation();
+		seekToClientX(e.clientX);
+	}
+
+	function onSeekPointerUp(e: PointerEvent) {
+		scrubbing = false;
+		e.stopPropagation();
+	}
+
+	function onSeekKey(e: KeyboardEvent) {
+		if (!el || !duration) return;
+		if (e.key === 'ArrowLeft') {
+			e.stopPropagation();
+			el.currentTime = Math.max(0, currentTime - 5);
+		} else if (e.key === 'ArrowRight') {
+			e.stopPropagation();
+			el.currentTime = Math.min(duration, currentTime + 5);
+		}
+	}
+
 	// Pick object-fit from the clip's real aspect (read once dimensions are known).
 	// Only clips WIDER than the viewport get `contain` (letterboxed) — `cover`
 	// would middle-crop their sides (the operator's horizontal-video complaint).
@@ -102,6 +147,8 @@
 <div class="media">
 	<video
 		bind:this={el}
+		bind:currentTime
+		bind:duration
 		src={live ? item.url : undefined}
 		{preload}
 		muted
@@ -135,6 +182,28 @@
 	{#if needsTap}
 		<div class="tap-hint" aria-hidden="true">
 			<Play size={64} fill="currentColor" />
+		</div>
+	{/if}
+
+	{#if active}
+		<div
+			class="seek"
+			bind:this={seekEl}
+			role="slider"
+			tabindex="0"
+			aria-label="Seek"
+			aria-valuemin={0}
+			aria-valuemax={100}
+			aria-valuenow={Math.round(progress)}
+			onpointerdown={onSeekPointerDown}
+			onpointermove={onSeekPointerMove}
+			onpointerup={onSeekPointerUp}
+			onpointercancel={onSeekPointerUp}
+			onkeydown={onSeekKey}
+		>
+			<div class="seek-track">
+				<div class="seek-fill" style:width={`${progress}%`}></div>
+			</div>
 		</div>
 	{/if}
 </div>
@@ -208,6 +277,36 @@
 		color: rgba(255, 255, 255, 0.85);
 		pointer-events: none;
 		text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+	}
+
+	/* Bottom seek bar: a tall transparent touch strip with a thin visible track,
+	   sitting above the full-bleed tap target so scrubbing doesn't toggle play. */
+	.seek {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		z-index: 3;
+		display: flex;
+		align-items: flex-end;
+		height: 1.75rem;
+		padding-bottom: calc(env(safe-area-inset-bottom) + 0.35rem);
+		touch-action: none;
+		cursor: pointer;
+	}
+
+	.seek-track {
+		width: 100%;
+		height: 3px;
+		margin: 0 0.75rem;
+		background: rgba(255, 255, 255, 0.25);
+		border-radius: 999px;
+		overflow: hidden;
+	}
+
+	.seek-fill {
+		height: 100%;
+		background: rgba(255, 255, 255, 0.9);
 	}
 
 	.spinner {
