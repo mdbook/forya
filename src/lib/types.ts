@@ -43,4 +43,8 @@ export interface FeedSettings {
 	preloadBehind: number;
 	/** Initial autoplay-next preference (AUTO_ADVANCE). */
 	autoAdvance: boolean;
+	/** Whether generated posters are available (DATA_DIR set, 0.5). When false the
+	 *  client never requests `/api/poster`, so a disabled instance makes no extra
+	 *  requests. */
+	posters: boolean;
 }

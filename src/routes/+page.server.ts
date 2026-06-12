@@ -33,7 +33,8 @@ export const load: PageServerLoad = async () => {
 			allowHide: config.allowHide,
 			preloadAhead: config.preloadAhead,
 			preloadBehind: config.preloadBehind,
-			autoAdvance: config.autoAdvance
+			autoAdvance: config.autoAdvance,
+			posters: config.dataDir !== ''
 		}
 	};
 };

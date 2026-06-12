@@ -322,6 +322,7 @@
 						{muted}
 						{autoAdvance}
 						{viewportAR}
+						posters={settings.posters}
 						onfinished={() => scrollTo(activeIndex + 1)}
 						onready={() => (activeReady = true)}
 					/>
