@@ -62,6 +62,30 @@ rollback.
   previously-uncached cards. Preload gradient inside the window: active + the
   immediate neighbour in the travel direction get `auto`, the rest `metadata`.
   (Superseded the 0.1.0 `preloadFor` "+1 warmer" metadata window.)
+  - **0.3.0 release hysteresis:** `VideoCard` no longer drops `src` the instant a
+    card leaves the window — it holds it ~1.2s (`RELEASE_DELAY_MS`) before
+    `video.load()`, cancelled if the card re-enters first. This stops a small
+    back-scroll (past a card then straight back) from reload→blank-frame. The
+    active-always-live guarantee is unchanged (active is always in-window, so it
+    never reaches the release path).
+- **The page feed is randomized per load; resume was removed (0.3.0).**
+  `+page.server.ts` shuffles the scan with a fresh server-side seed each request
+  (`seededShuffle`, reused from `videos.ts` — that file is _not_ modified). SSR'd,
+  so no reorder flash; server stays stateless. This is an **intentional deviation
+  from SPEC §4** (which lists a resume-to-last-index) and the **§3 page default**
+  (mtime-desc): a saved index is meaningless once the order reshuffles each visit,
+  so `stores/seen.ts` and the resume/`saveSeen` wiring were deleted, not left
+  dangling. **`/api/feed` is unchanged** — still mtime-desc by default with opt-in
+  `?shuffle=1&seed=N`; only the page default changed. `hidden.ts` filters by
+  filename, so hides still work post-shuffle.
+- **Object-fit is symmetric (0.3.0).** `src/lib/fit.ts` `pickFit(vw, vh,
+viewportAR)` is pure (guarded by `tests/fit.test.ts`): it letterboxes
+  (`contain`) once the clip/viewport aspect ratios diverge past `MAX_COVER_RATIO`
+  (1.8) in **either** direction — landscape-on-portrait _and_ portrait-on-
+  landscape (the latter was the 0.3.0 "middle-third on a desktop" bug; the 0.2.0
+  rule only caught the former). Normal portrait-on-portrait stays `cover`.
+  `VideoCard` derives `fit` reactively from intrinsic dims + a `viewportAR` prop
+  that `Feed` updates on resize/orientation, so it re-fits on rotate.
 - **Hiding ("trash") is client-side only — `VIDEO_DIR` stays `:ro`.** The hide
   control (`ALLOW_HIDE`, default off) adds the filename to a per-`FEED_NAME`
   localStorage set (`stores/hidden.ts`); `Feed` renders through the pure
@@ -89,6 +113,25 @@ A video autoplays on iOS only if it is **`muted`** AND **`playsinline`**, and yo
 don't fight the browser by decoding many at once. So: both attributes on every
 `<video>`, only the active card plays, and `.play()` returns a Promise whose
 `.catch()` surfaces a tap-to-play overlay when iOS still refuses.
+
+**0.3.0 autoplay/first-frame handling** (the deterministic half; iOS-specific
+tuning is operator-on-device, criterion 3):
+
+- **Muted autoplay is never gated.** The active card always attempts
+  `muted`+`playsinline` autoplay on load with no tap. The session "playback
+  unlocked" flag (`stores/playback.svelte.ts`, set on the first tap-to-play or
+  unmute) **must not** gate that initial muted attempt — it only decides whether a
+  _transiently-rejected_ play is retried once (when already unlocked) vs. shown as
+  a manual play button. Don't let the flag creep into the autoplay path.
+- **Spinner and play button are mutually exclusive.** `VideoCard` shows the play
+  glyph only when `active && (blocked || paused)` (autoplay refused _or_ the user
+  tapped pause) and the buffering spinner only when no play glyph is up — so the
+  spinner can never render behind the play button (the reported bug). A normally-
+  autoplaying card flashes neither.
+- **First-frame nudge.** On `loadedmetadata`, if the video is paused at `t=0` we
+  nudge `currentTime` a hair so iOS paints a poster frame instead of blank black
+  on a scrolled-to / autoplay-blocked card. Best-effort; the gradient+filename
+  placeholder stays until `loadeddata` regardless.
 
 ## Future TODOs (not built in v1)
 

@@ -4,8 +4,10 @@
 	// a reactive `preload`. Play/pause is driven by the `active` prop from the
 	// single IntersectionObserver in Feed.svelte — this card never observes
 	// intersection itself, so only one video plays at a time.
-	import { untrack } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import Play from '@lucide/svelte/icons/play';
+	import { pickFit } from '$lib/fit';
+	import { playback, unlockPlayback } from '$lib/stores/playback.svelte';
 	import type { FeedItem } from '$lib/types';
 
 	let {
@@ -15,6 +17,7 @@
 		preload,
 		muted,
 		autoAdvance,
+		viewportAR,
 		onfinished
 	}: {
 		item: FeedItem;
@@ -27,14 +30,39 @@
 		muted: boolean;
 		/** Advance to the next card on end instead of looping. */
 		autoAdvance: boolean;
+		/** Viewport aspect ratio (w/h), reactive — drives object-fit so the card
+		 *  re-letterboxes on rotate/resize, not just at load. */
+		viewportAR: number;
 		onfinished: () => void;
 	} = $props();
 
 	let el = $state<HTMLVideoElement>();
 	let loaded = $state(false);
 	let buffering = $state(false);
-	let needsTap = $state(false);
-	let fit = $state<'cover' | 'contain'>('cover');
+	// `blocked`: autoplay was attempted and rejected (no gesture yet). `paused`:
+	// the user tapped to pause. The manual play affordance shows for EITHER — and
+	// only then, so a normally-autoplaying card never flashes a play button. The
+	// buffering spinner is rendered only when that affordance is NOT up, so the
+	// two can never stack (the "buffer behind play button" bug).
+	let blocked = $state(false);
+	let paused = $state(false);
+	// Intrinsic video dimensions (set once metadata loads); fit derives from these.
+	let vw = $state(0);
+	let vh = $state(0);
+
+	// `src` lags the `live` window by a short hysteresis so a small back-scroll
+	// (past a card then straight back) doesn't drop and reload it → blank frame.
+	// The active card is always live, so it never enters the release path.
+	let srcLive = $state(false);
+	let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+	const RELEASE_DELAY_MS = 1200;
+
+	const showPlay = $derived(active && (blocked || paused));
+	const showSpinner = $derived(active && buffering && loaded && !showPlay);
+
+	// Reactive on viewportAR, so rotating/resizing re-letterboxes. Decision logic
+	// lives in the pure `pickFit` (guarded by tests/fit.test.ts).
+	const fit = $derived(pickFit(vw, vh, viewportAR));
 
 	// Seek bar (active card only). currentTime/duration are two-way/readonly media
 	// bindings; dragging sets currentTime, which issues a fresh Range request —
@@ -81,31 +109,39 @@
 		}
 	}
 
-	// Pick object-fit from the clip's real aspect (read once dimensions are known).
-	// Only clips WIDER than the viewport get `contain` (letterboxed) — `cover`
-	// would middle-crop their sides (the operator's horizontal-video complaint).
-	// Portrait / near-portrait keeps `cover` so proper vertical content still
-	// fills edge-to-edge. The 1.15 slack avoids letterboxing a near-match.
-	function chooseFit(v: HTMLVideoElement) {
-		const vw = v.videoWidth;
-		const vh = v.videoHeight;
-		if (!vw || !vh) return;
-		const videoAR = vw / vh;
-		const containerAR =
-			v.clientHeight > 0
-				? v.clientWidth / v.clientHeight
-				: typeof window !== 'undefined'
-					? window.innerWidth / window.innerHeight
-					: videoAR;
-		fit = videoAR > containerAR * 1.15 ? 'contain' : 'cover';
+	function readDimensions(v: HTMLVideoElement) {
+		vw = v.videoWidth;
+		vh = v.videoHeight;
+		// Coax iOS into decoding/painting a poster frame even while paused/pre-
+		// gesture, so a scrolled-to (or autoplay-blocked) card shows its first
+		// frame instead of blank black. Best-effort — ignored if not yet seekable.
+		if (v.paused && v.currentTime === 0) {
+			try {
+				v.currentTime = Math.min(0.05, (v.duration || 1) / 2);
+			} catch {
+				/* not seekable yet — harmless */
+			}
+		}
 	}
 
 	function tryPlay(v: HTMLVideoElement) {
+		// Muted autoplay is gesture-free (SPEC §4, criterion 3): we ALWAYS attempt
+		// it regardless of unlock state. `playback.unlocked` only decides whether a
+		// transient rejection is retried silently vs surfaced as a play button.
 		v.muted = muted;
 		const p = v.play();
 		if (p && typeof p.then === 'function') {
-			// iOS rejects autoplay if anything is off → surface a tap-to-play overlay.
-			p.then(() => (needsTap = false)).catch(() => (needsTap = true));
+			p.then(() => (blocked = false)).catch(() => {
+				if (playback.unlocked) {
+					requestAnimationFrame(() => {
+						v.play()
+							.then(() => (blocked = false))
+							.catch(() => (blocked = true));
+					});
+				} else {
+					blocked = true;
+				}
+			});
 		}
 	}
 
@@ -127,25 +163,50 @@
 		if (v) v.muted = muted;
 	});
 
-	// Leaving the window: the declarative `src` attribute is already gone (effects
-	// run after the DOM update), so load() resets the element to empty and frees
-	// the iOS decoder. Reset overlay state so the placeholder returns; re-entering
-	// the window rebinds `src` and reloads. The active card never hits this (it's
-	// always live), so playback is never interrupted by virtualization.
+	// Hysteresis: bring `src` in immediately when the card enters the window; on
+	// leaving, hold it RELEASE_DELAY_MS before dropping (cancelled if it re-enters
+	// first). Depends only on `live` — the srcLive read is untracked to avoid a
+	// self-triggering loop.
+	$effect(() => {
+		const isLive = live;
+		untrack(() => {
+			clearTimeout(releaseTimer);
+			if (isLive) {
+				srcLive = true;
+			} else if (srcLive) {
+				releaseTimer = setTimeout(() => (srcLive = false), RELEASE_DELAY_MS);
+			}
+		});
+	});
+
+	// Once `src` is actually gone (srcLive false → the declarative attr is already
+	// removed), load() resets the element to empty and frees the iOS decoder.
+	// Reset overlay state so the placeholder returns; re-entering rebinds + reloads.
+	// The active card never hits this (always live → always srcLive).
 	$effect(() => {
 		const v = el;
-		if (!v || live) return;
+		if (!v || srcLive) return;
 		untrack(() => v.load());
 		loaded = false;
-		needsTap = false;
+		blocked = false;
 		buffering = false;
+		paused = false;
 	});
+
+	onDestroy(() => clearTimeout(releaseTimer));
 
 	function togglePlay() {
 		const v = el;
 		if (!v) return;
-		if (v.paused) tryPlay(v);
-		else v.pause();
+		unlockPlayback(); // a tap is a real user gesture
+		if (v.paused) {
+			paused = false;
+			blocked = false;
+			tryPlay(v);
+		} else {
+			v.pause();
+			paused = true;
+		}
 	}
 </script>
 
@@ -154,22 +215,26 @@
 		bind:this={el}
 		bind:currentTime
 		bind:duration
-		src={live ? item.url : undefined}
+		src={srcLive ? item.url : undefined}
 		{preload}
 		muted
 		playsinline
 		loop={!autoAdvance}
 		class:loaded
 		class:contain={fit === 'contain'}
-		onloadedmetadata={() => chooseFit(el!)}
+		onloadedmetadata={() => readDimensions(el!)}
 		onloadeddata={() => (loaded = true)}
 		onended={() => {
 			if (active && autoAdvance) onfinished();
 		}}
 		onwaiting={() => (buffering = true)}
+		onplay={() => {
+			paused = false;
+			blocked = false;
+		}}
 		onplaying={() => {
 			buffering = false;
-			needsTap = false;
+			blocked = false;
 		}}
 	></video>
 
@@ -179,15 +244,15 @@
 		</div>
 	{/if}
 
-	{#if buffering && loaded}
+	{#if showSpinner}
 		<div class="spinner" aria-hidden="true"></div>
 	{/if}
 
 	<!-- Full-bleed tap target: tap = play/pause (a real <button> for a11y +
-	     keyboard). The fixed MuteToggle sits above this via z-index. -->
+	     keyboard). The action rail sits above this via z-index. -->
 	<button class="tap" aria-label="Play or pause" onclick={togglePlay}></button>
 
-	{#if needsTap}
+	{#if showPlay}
 		<div class="tap-hint" aria-hidden="true">
 			<Play size={64} fill="currentColor" />
 		</div>

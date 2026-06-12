@@ -33,12 +33,17 @@ serving backend. See [`handoff.md`](./handoff.md) for the full story.
   plays and seeks — this is the whole point of the app.
 - **iOS-correct feed**: `muted`+`playsinline` autoplay, `100dvh`/`100svh`
   scroll-snap (never `100vh`), one video playing at a time, tap-to-play
-  fallback, mute toggle.
+  fallback.
+- **Randomized order**: the feed is shuffled fresh on every page load (server-
+  side, so no reorder flash).
 - **Windowed lazy-loading**: only a small window around the active card holds a
   decoder; buffers ahead, caches recent, reloads on back-scroll.
-- **Adaptive fit**: off-aspect clips letterbox instead of middle-cropping.
-- **Per-video actions**: share/save, a seek bar, autoplay-next vs. loop, an
-  info overlay, and an optional client-side hide control (`ALLOW_HIDE`).
+- **Adaptive fit**: off-aspect clips letterbox instead of cropping — in either
+  direction (landscape-on-portrait _and_ portrait-on-landscape).
+- **One control rail**: mute, loop/next (labelled with the current mode),
+  share/save, an info overlay, and an optional client-side hide control
+  (`ALLOW_HIDE`) — all on a single right-side rail. Plus a seek bar on the
+  active card.
 - **Installable PWA**: per-instance home-screen name, standalone portrait.
 - **Self-contained**: serves UI + bytes from one image; runs non-root.
 - Desktop fallback: ↑/↓ + `j`/`k` to move, Space to play/pause, `m` to mute.
@@ -71,8 +76,10 @@ docker run -p 3000:3000 -v /my/videos:/srv/videos:ro \
 
 Supported extensions: **`.mp4` `.mov` `.webm` `.m4v`**. Dotfiles and `*.partial`
 files are skipped when `IGNORE_HIDDEN=true` (the default), so a downloader
-writing `clip.mp4.partial` won't surface a half-file. Default feed order is
-most-recently-modified first.
+writing `clip.mp4.partial` won't surface a half-file. The **page feed is
+randomized** — shuffled fresh on every load (since 0.3.0; there is no resume to a
+previous position). The underlying scan is most-recently-modified first, which is
+what the `/api/feed` endpoint still returns by default.
 
 ### Endpoints
 
