@@ -5,6 +5,7 @@
 	// single IntersectionObserver in Feed.svelte — this card never observes
 	// intersection itself, so only one video plays at a time.
 	import { untrack } from 'svelte';
+	import Play from '@lucide/svelte/icons/play';
 	import type { FeedItem } from '$lib/types';
 
 	let {
@@ -91,7 +92,9 @@
 	<button class="tap" aria-label="Play or pause" onclick={togglePlay}></button>
 
 	{#if needsTap}
-		<div class="tap-hint" aria-hidden="true">►</div>
+		<div class="tap-hint" aria-hidden="true">
+			<Play size={64} fill="currentColor" />
+		</div>
 	{/if}
 </div>
 

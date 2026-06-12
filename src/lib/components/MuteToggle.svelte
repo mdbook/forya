@@ -2,6 +2,12 @@
 	// Safe-area corner mute button (SPEC §4). The first tap unlocks audio — the
 	// actual unlock (setting the active <video>.muted = false inside the gesture)
 	// happens in Feed.toggleMute; this is just the control + icon.
+	// Icons are per-icon lucide imports so the bundler tree-shakes them (the rest
+	// of the set never ships) — they compile to inline SVG, so the PWA stays
+	// offline-safe (no runtime icon CDN).
+	import Volume2 from '@lucide/svelte/icons/volume-2';
+	import VolumeX from '@lucide/svelte/icons/volume-x';
+
 	let { muted, ontoggle }: { muted: boolean; ontoggle: () => void } = $props();
 </script>
 
@@ -12,10 +18,9 @@
 	aria-pressed={!muted}
 >
 	{#if muted}
-		<!-- muted glyph -->
-		🔇
+		<VolumeX size={22} aria-hidden="true" />
 	{:else}
-		🔊
+		<Volume2 size={22} aria-hidden="true" />
 	{/if}
 </button>
 
