@@ -1,25 +1,111 @@
 # forya
 
-An iOS-first vertical video feed (TikTok-style) that serves both the UI and the
-video bytes — with correct HTTP Range support — from one self-contained Docker
-image. SvelteKit (adapter-node) + Svelte 5 + TypeScript.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-> **Scaffold in progress.** This repository is being built milestone by
-> milestone. The full public README — quickstart, env table, the `/srv/videos`
-> contract, and the auth/multi-feed notes — lands with milestone 05. See
-> `SPEC.md` in the project workspace for the architecture.
+An **iOS-first vertical video feed** (TikTok-style) that serves both the UI and
+the video bytes — with correct HTTP Range support — from one self-contained
+Docker image. Point it at a directory of videos and it just works:
 
-## Quick dev
+```bash
+docker run -p 3000:3000 -v /path/to/videos:/srv/videos registry.mdbook.me/mikayla/forya
+```
+
+Then open <http://localhost:3000>. On an iPhone, use **Share → Add to Home
+Screen** to launch it full-screen like a native app.
+
+> _Screenshot / demo gif: TODO._
+
+Built with SvelteKit (adapter-node) + Svelte 5 + TypeScript. No database, no
+build step at runtime, no ffmpeg — one Node process scans the directory and
+streams the files.
+
+## Why
+
+It's a focused rewrite of a Caddy-file-server + React feed that was buggy on iOS
+Safari: autoplay rejected, `100vh` layout breaking under the dynamic toolbar,
+many videos decoding at once, and broken seek/scrub from mishandled HTTP Range.
+forya fixes those at the root — an iOS-tuned feed UI over a thin, **Range-correct**
+serving backend. See [`handoff.md`](./handoff.md) for the full story.
+
+## Features
+
+- **Correct HTTP Range** (`206` / `Content-Range` / `Accept-Ranges`) so iOS
+  plays and seeks — this is the whole point of the app.
+- **iOS-correct feed**: `muted`+`playsinline` autoplay, `100dvh`/`100svh`
+  scroll-snap (never `100vh`), one video playing at a time, tap-to-play
+  fallback, mute toggle.
+- **Installable PWA**: per-instance home-screen name, standalone portrait.
+- **Self-contained**: serves UI + bytes from one image; runs non-root.
+- Desktop fallback: ↑/↓ + `j`/`k` to move, Space to play/pause, `m` to mute.
+
+## Configuration
+
+All via environment variables:
+
+| Variable        | Default       | Description                                                            |
+| --------------- | ------------- | ---------------------------------------------------------------------- |
+| `VIDEO_DIR`     | `/srv/videos` | Directory scanned for videos (mount it read-only).                     |
+| `FEED_NAME`     | `feed`        | Title / branding, PWA home-screen name, and client storage key prefix. |
+| `IGNORE_HIDDEN` | `true`        | Hide dotfiles and `*.partial` (mid-download) files.                    |
+| `PORT`          | `3000`        | Listen port (adapter-node native).                                     |
+| `HOST`          | `0.0.0.0`     | Listen host (adapter-node native).                                     |
+
+### The `/srv/videos` contract
+
+forya treats `VIDEO_DIR` as **read-only input it does not own**. It only reads;
+it never writes, renames, or deletes. Mount it `:ro`:
+
+```bash
+docker run -p 3000:3000 -v /my/videos:/srv/videos:ro \
+  -e FEED_NAME=liked registry.mdbook.me/mikayla/forya
+```
+
+Supported extensions: **`.mp4` `.mov` `.webm` `.m4v`**. Dotfiles and `*.partial`
+files are skipped when `IGNORE_HIDDEN=true` (the default), so a downloader
+writing `clip.mp4.partial` won't surface a half-file. Default feed order is
+most-recently-modified first.
+
+### Endpoints
+
+- `GET /` — the feed UI.
+- `GET /api/feed` — JSON manifest: `{ feed, items: [{ name, url, size, mtime, type }] }`. `?shuffle=1&seed=N` for a deterministic shuffle.
+- `GET|HEAD /api/media/<name>` — the video bytes, with full Range support.
+- `GET /api/healthz` — `200 ok` (healthcheck).
+- `GET /manifest.webmanifest` — the PWA manifest, branded with `FEED_NAME`.
+
+## Auth
+
+forya ships **no built-in authentication** (v1). Gate it at your reverse proxy.
+This homelab fronts the public domains with **Authentik forward-auth** and
+leaves the LAN open. _TODO: optional in-app native OIDC._
+
+## Multiple feeds
+
+One image, one feed per container. To serve several feeds, run several
+containers with different `VIDEO_DIR` + `FEED_NAME`. _Multi-feed within a single
+instance is a future TODO, not built now._
+
+## Development
 
 ```bash
 npm install
-npm run dev        # dev server
-npm run build      # production build (adapter-node) → ./build
-node build         # run the built server
+npm run dev          # dev server
+npm run check        # svelte-check
+npm run lint         # eslint
+npm run format:check # prettier
+npm test             # vitest (Range + scan guards)
+npm run build        # adapter-node build → ./build
+node build           # run the built server
 ```
 
-`GET /api/healthz` → `ok`.
+## Repository
+
+The canonical repository is **GitLab** (`gitlab.mdbook.me/mikayla/forya`), which
+runs CI and publishes the image. It **push-mirrors** to
+[`github.com/mdbook/forya`](https://github.com/mdbook/forya) for public OSS
+visibility. **Issues and pull requests on the GitHub mirror are not watched** —
+please use GitLab.
 
 ## License
 
-MIT (added in milestone 05).
+[MIT](./LICENSE) © Mikayla D. Burke
