@@ -10,8 +10,17 @@
 	import MuteToggle from './MuteToggle.svelte';
 	import ActionRail from './ActionRail.svelte';
 	import Undo2 from '@lucide/svelte/icons/undo-2';
+	import Repeat from '@lucide/svelte/icons/repeat';
+	import SkipForward from '@lucide/svelte/icons/skip-forward';
 	import type { FeedItem, FeedSettings } from '$lib/types';
-	import { loadMute, saveMute, loadInfo, saveInfo } from '$lib/stores/prefs';
+	import {
+		loadMute,
+		saveMute,
+		loadInfo,
+		saveInfo,
+		loadAutoAdvance,
+		saveAutoAdvance
+	} from '$lib/stores/prefs';
 	import { loadSeen, saveSeen } from '$lib/stores/seen';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
 
@@ -36,8 +45,15 @@
 	let lastHidden = $state<string | null>(null);
 	let undoTimer: ReturnType<typeof setTimeout> | undefined;
 	let infoOpen = $state(false);
+	// Initial value is set from settings (or the stored pref) in onMount; the
+	// literal here is just the pre-hydration placeholder (no video has ended yet).
+	let autoAdvance = $state(false);
 	const visible = $derived(applyHidden(items, hidden));
 	const activeItem = $derived(visible[activeIndex]);
+
+	function toggleAutoAdvance() {
+		autoAdvance = !autoAdvance;
+	}
 
 	/** Share the active video via the iOS share sheet, or fall back to a direct
 	 *  download when the Web Share API is unavailable (desktop). */
@@ -161,6 +177,7 @@
 	onMount(() => {
 		muted = loadMute(feedName);
 		infoOpen = loadInfo(feedName);
+		autoAdvance = loadAutoAdvance(feedName, settings.autoAdvance);
 		for (const n of loadHidden(feedName)) hidden.add(n);
 
 		const resume = loadSeen(feedName);
@@ -210,6 +227,10 @@
 	});
 
 	$effect(() => {
+		saveAutoAdvance(feedName, autoAdvance);
+	});
+
+	$effect(() => {
 		saveSeen(feedName, {
 			index: activeIndex,
 			names: visible.slice(0, activeIndex + 1).map((i) => i.name)
@@ -229,11 +250,31 @@
 		{#each visible as item, i (item.name)}
 			{@const ws = windowState(i)}
 			<div class="card" data-index={i} bind:this={cardEls[i]}>
-				<VideoCard {item} active={i === activeIndex} live={ws.live} preload={ws.preload} {muted} />
+				<VideoCard
+					{item}
+					active={i === activeIndex}
+					live={ws.live}
+					preload={ws.preload}
+					{muted}
+					{autoAdvance}
+					onfinished={() => scrollTo(activeIndex + 1)}
+				/>
 			</div>
 		{/each}
 	</div>
 	<MuteToggle {muted} ontoggle={toggleMute} />
+	<button
+		class="advance-toggle"
+		onclick={toggleAutoAdvance}
+		aria-label={autoAdvance ? 'Autoplay next is on' : 'Loop is on'}
+		aria-pressed={autoAdvance}
+	>
+		{#if autoAdvance}
+			<SkipForward size={20} aria-hidden="true" />
+		{:else}
+			<Repeat size={20} aria-hidden="true" />
+		{/if}
+	</button>
 	<ActionRail
 		allowHide={settings.allowHide}
 		{infoOpen}
@@ -274,6 +315,29 @@
 	.empty .hint {
 		opacity: 0.5;
 		font-size: 0.85rem;
+	}
+
+	.advance-toggle {
+		position: fixed;
+		top: calc(env(safe-area-inset-top) + 0.75rem);
+		left: calc(env(safe-area-inset-left) + 0.75rem);
+		z-index: 10;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 2.75rem;
+		height: 2.75rem;
+		padding: 0;
+		color: #fff;
+		background: rgba(0, 0, 0, 0.4);
+		border: 1px solid rgba(255, 255, 255, 0.15);
+		border-radius: 50%;
+		cursor: pointer;
+		backdrop-filter: blur(8px);
+	}
+
+	.advance-toggle:active {
+		transform: scale(0.92);
 	}
 
 	.info-overlay {

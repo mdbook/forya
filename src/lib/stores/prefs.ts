@@ -5,6 +5,7 @@ import { browser } from '$app/environment';
 
 const muteKey = (feedName: string) => `forya:${feedName}:mute`;
 const infoKey = (feedName: string) => `forya:${feedName}:info`;
+const autoAdvanceKey = (feedName: string) => `forya:${feedName}:autoadvance`;
 
 /** Load the persisted mute preference (defaults to muted — iOS autoplay rule). */
 export function loadMute(feedName: string): boolean {
@@ -34,6 +35,24 @@ export function saveInfo(feedName: string, on: boolean): void {
 	if (!browser) return;
 	try {
 		localStorage.setItem(infoKey(feedName), on ? '1' : '0');
+	} catch {
+		/* localStorage unavailable — non-fatal */
+	}
+}
+
+/** Load the autoplay-next preference, falling back to the instance default
+ *  (AUTO_ADVANCE) when the user hasn't set one. */
+export function loadAutoAdvance(feedName: string, fallback: boolean): boolean {
+	if (!browser) return fallback;
+	const v = localStorage.getItem(autoAdvanceKey(feedName));
+	return v === null ? fallback : v === '1';
+}
+
+/** Persist the autoplay-next preference. */
+export function saveAutoAdvance(feedName: string, on: boolean): void {
+	if (!browser) return;
+	try {
+		localStorage.setItem(autoAdvanceKey(feedName), on ? '1' : '0');
 	} catch {
 		/* localStorage unavailable — non-fatal */
 	}

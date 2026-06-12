@@ -13,7 +13,9 @@
 		active,
 		live,
 		preload,
-		muted
+		muted,
+		autoAdvance,
+		onfinished
 	}: {
 		item: FeedItem;
 		active: boolean;
@@ -23,6 +25,9 @@
 		live: boolean;
 		preload: 'auto' | 'metadata' | 'none';
 		muted: boolean;
+		/** Advance to the next card on end instead of looping. */
+		autoAdvance: boolean;
+		onfinished: () => void;
 	} = $props();
 
 	let el = $state<HTMLVideoElement>();
@@ -153,11 +158,14 @@
 		{preload}
 		muted
 		playsinline
-		loop
+		loop={!autoAdvance}
 		class:loaded
 		class:contain={fit === 'contain'}
 		onloadedmetadata={() => chooseFit(el!)}
 		onloadeddata={() => (loaded = true)}
+		onended={() => {
+			if (active && autoAdvance) onfinished();
+		}}
 		onwaiting={() => (buffering = true)}
 		onplaying={() => {
 			buffering = false;
