@@ -21,3 +21,15 @@ export interface Feed {
 	feed: string;
 	items: FeedItem[];
 }
+
+/** Client-relevant runtime settings, surfaced from `config` via the page load
+ *  (the server stays the source of truth; the client never reads env). */
+export interface FeedSettings {
+	/** Show the per-card hide ("trash") control (ALLOW_HIDE). */
+	allowHide: boolean;
+	/** Lazy-load window sizes (PRELOAD_AHEAD / PRELOAD_BEHIND). */
+	preloadAhead: number;
+	preloadBehind: number;
+	/** Initial autoplay-next preference (AUTO_ADVANCE). */
+	autoAdvance: boolean;
+}

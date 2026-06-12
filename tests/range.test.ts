@@ -193,6 +193,30 @@ describe('GET|HEAD /api/media/[name]', () => {
 		expect(res.headers.get('content-length')).toBe('10');
 	});
 
+	it('Cache-Control is additive and does not perturb the range responses', async () => {
+		// 206 partial: header present, AND the range contract is byte-identical.
+		const partial = (await GET(event(NAME, { range: 'bytes=0-1' }))) as Response;
+		expect(partial.headers.get('cache-control')).toBe('private, max-age=3600');
+		expect(partial.status).toBe(206);
+		expect(partial.headers.get('content-range')).toBe(`bytes 0-1/${SIZE}`);
+		expect(partial.headers.get('content-length')).toBe('2');
+		expect(partial.headers.get('accept-ranges')).toBe('bytes');
+		expect((await partial.arrayBuffer()).byteLength).toBe(2);
+
+		// 200 full: header present, still a full-length 200.
+		const full = (await GET(event(NAME))) as Response;
+		expect(full.headers.get('cache-control')).toBe('private, max-age=3600');
+		expect(full.status).toBe(200);
+		expect(full.headers.get('content-length')).toBe(String(SIZE));
+		expect(full.headers.get('content-range')).toBeNull();
+
+		// HEAD+Range still 206 with no body; caching header doesn't change that.
+		const head = (await HEAD(event(NAME, { range: 'bytes=0-1' }))) as Response;
+		expect(head.headers.get('cache-control')).toBe('private, max-age=3600');
+		expect(head.status).toBe(206);
+		expect((await head.arrayBuffer()).byteLength).toBe(0);
+	});
+
 	it('traversal probe → 404, no leak', async () => {
 		// mirrors what the router hands us once %2f is decoded
 		const probe = decodeURIComponent('..%2f..%2fetc%2fpasswd');

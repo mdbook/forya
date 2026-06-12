@@ -34,6 +34,11 @@ serving backend. See [`handoff.md`](./handoff.md) for the full story.
 - **iOS-correct feed**: `muted`+`playsinline` autoplay, `100dvh`/`100svh`
   scroll-snap (never `100vh`), one video playing at a time, tap-to-play
   fallback, mute toggle.
+- **Windowed lazy-loading**: only a small window around the active card holds a
+  decoder; buffers ahead, caches recent, reloads on back-scroll.
+- **Adaptive fit**: off-aspect clips letterbox instead of middle-cropping.
+- **Per-video actions**: share/save, a seek bar, autoplay-next vs. loop, an
+  info overlay, and an optional client-side hide control (`ALLOW_HIDE`).
 - **Installable PWA**: per-instance home-screen name, standalone portrait.
 - **Self-contained**: serves UI + bytes from one image; runs non-root.
 - Desktop fallback: ↑/↓ + `j`/`k` to move, Space to play/pause, `m` to mute.
@@ -42,13 +47,17 @@ serving backend. See [`handoff.md`](./handoff.md) for the full story.
 
 All via environment variables:
 
-| Variable        | Default       | Description                                                            |
-| --------------- | ------------- | ---------------------------------------------------------------------- |
-| `VIDEO_DIR`     | `/srv/videos` | Directory scanned for videos (mount it read-only).                     |
-| `FEED_NAME`     | `feed`        | Title / branding, PWA home-screen name, and client storage key prefix. |
-| `IGNORE_HIDDEN` | `true`        | Hide dotfiles and `*.partial` (mid-download) files.                    |
-| `PORT`          | `3000`        | Listen port (adapter-node native).                                     |
-| `HOST`          | `0.0.0.0`     | Listen host (adapter-node native).                                     |
+| Variable         | Default       | Description                                                             |
+| ---------------- | ------------- | ----------------------------------------------------------------------- |
+| `VIDEO_DIR`      | `/srv/videos` | Directory scanned for videos (mount it read-only).                      |
+| `FEED_NAME`      | `feed`        | Title / branding, PWA home-screen name, and client storage key prefix.  |
+| `IGNORE_HIDDEN`  | `true`        | Hide dotfiles and `*.partial` (mid-download) files.                     |
+| `ALLOW_HIDE`     | `false`       | Show the per-card hide ("trash") control. Hiding is client-side only.   |
+| `PRELOAD_AHEAD`  | `3`           | Lazy-load window: cards ahead of the active one that carry a video src. |
+| `PRELOAD_BEHIND` | `2`           | Lazy-load window: cards behind the active one kept warm.                |
+| `AUTO_ADVANCE`   | `false`       | Default for autoplay-next (advance on end vs. loop); user can toggle.   |
+| `PORT`           | `3000`        | Listen port (adapter-node native).                                      |
+| `HOST`           | `0.0.0.0`     | Listen host (adapter-node native).                                      |
 
 ### The `/srv/videos` contract
 

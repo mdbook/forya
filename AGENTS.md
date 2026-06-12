@@ -68,7 +68,11 @@ build`), `check` (svelte-check), `lint` (eslint), `format` / `format:check`
 
 - **`/srv/videos` is read-only input.** Read only — never write/rename/delete.
   Honor `VIDEO_DIR`; never hardcode a path. Same for `FEED_NAME` — never
-  hardcode `forya`/a feed name where the env var belongs.
+  hardcode `forya`/a feed name where the env var belongs. The hide ("trash")
+  control (`ALLOW_HIDE`, 0.2.0) is **client-side only** — it stashes filenames in
+  localStorage and filters the feed; it does **not** delete or move files, so
+  this contract holds. Don't turn it into a server-side disk mutation without an
+  explicit decision to drop the `:ro` mount.
 - **HTTP Range correctness is the entire reason this app exists.** The pure
   resolver in `videos.ts` (`resolveRange`) and the `/api/media/[name]` route are
   guarded by **`tests/range.test.ts`** — both the byte math AND the real HTTP
