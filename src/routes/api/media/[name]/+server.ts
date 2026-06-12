@@ -34,7 +34,15 @@ function baseHeaders(name: string, st: fs.Stats): Record<string, string> {
 		'accept-ranges': 'bytes',
 		'content-type': mimeFromExt(name),
 		'last-modified': st.mtime.toUTCString(),
-		etag: weakETag(st.size, st.mtimeMs)
+		etag: weakETag(st.size, st.mtimeMs),
+		// Purely additive: lets the browser reuse already-fetched bytes when
+		// scrolling back up (the windowed feed re-enters previous cards) without a
+		// revalidation round-trip. `private` because instances sit behind per-user
+		// forward-auth — never a shared proxy cache. The weak ETag/Last-Modified
+		// still drive revalidation once stale. Does NOT influence the Range branch
+		// logic below — the 206/Content-Range/Content-Length/416 contract is
+		// computed solely from resolveRange().
+		'cache-control': 'private, max-age=3600'
 	};
 }
 
