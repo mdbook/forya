@@ -4,6 +4,35 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.3.2 — kill the cold-scan stall (dir-mtime cache + single-flight)
+
+Serving-layer perf fix for the large-feed cold load. Pre-existing (0.3.0 had it
+under the black screen), surfaced once 0.3.1 cleared everything else. The HTTP
+Range contract and the rest of `videos.ts` are byte-unchanged — only the
+scan/cache block changed.
+
+### Fixed
+
+- **~9s cold page load on the largest feed (11.9k files).** The directory scan
+  is now cached and **invalidated by the directory's mtime** instead of a short
+  wall-clock TTL (which was shorter than the scan itself, so it re-scanned almost
+  every request). A stable feed directory scans **once**, then serves instantly;
+  it re-scans only when the directory actually changes (a dir mtime bumps on
+  entry add/remove/rename — exactly when the manifest changes).
+- **Concurrent-request stacking.** Concurrent scans of the same directory now
+  **single-flight** — they share one in-progress scan instead of each launching
+  their own (a 3× burst had stacked to 35–41s).
+
+### Notes
+
+- In-memory only — no new env vars, no writable volume, no `/docker` change; the
+  image stays stateless (clean watchtower swap). A single cold scan per deploy is
+  expected and acceptable.
+- Edge: a file changed in place without an add/remove/rename won't bump the dir
+  mtime, so its updated sort position could be stale until the next entry change
+  — negligible for write-once downloads (documented in `handoff.md`, with a
+  readdir-fingerprint fallback noted as the escape hatch).
+
 ## 0.3.1 — regression hotfix (black screen, scroll autoplay, slow load)
 
 Hotfix for regressions the operator's on-device iPhone smoke found in 0.3.0.
