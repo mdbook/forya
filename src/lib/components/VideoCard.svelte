@@ -24,6 +24,26 @@
 	let loaded = $state(false);
 	let buffering = $state(false);
 	let needsTap = $state(false);
+	let fit = $state<'cover' | 'contain'>('cover');
+
+	// Pick object-fit from the clip's real aspect (read once dimensions are known).
+	// Only clips WIDER than the viewport get `contain` (letterboxed) — `cover`
+	// would middle-crop their sides (the operator's horizontal-video complaint).
+	// Portrait / near-portrait keeps `cover` so proper vertical content still
+	// fills edge-to-edge. The 1.15 slack avoids letterboxing a near-match.
+	function chooseFit(v: HTMLVideoElement) {
+		const vw = v.videoWidth;
+		const vh = v.videoHeight;
+		if (!vw || !vh) return;
+		const videoAR = vw / vh;
+		const containerAR =
+			v.clientHeight > 0
+				? v.clientWidth / v.clientHeight
+				: typeof window !== 'undefined'
+					? window.innerWidth / window.innerHeight
+					: videoAR;
+		fit = videoAR > containerAR * 1.15 ? 'contain' : 'cover';
+	}
 
 	function tryPlay(v: HTMLVideoElement) {
 		v.muted = muted;
@@ -69,6 +89,8 @@
 		playsinline
 		loop
 		class:loaded
+		class:contain={fit === 'contain'}
+		onloadedmetadata={() => chooseFit(el!)}
 		onloadeddata={() => (loaded = true)}
 		onwaiting={() => (buffering = true)}
 		onplaying={() => {
@@ -119,6 +141,12 @@
 
 	video.loaded {
 		opacity: 1;
+	}
+
+	/* Off-aspect (wider-than-viewport) clips letterbox instead of side-cropping.
+	   The .media background is #000, so the bars are clean black. */
+	video.contain {
+		object-fit: contain;
 	}
 
 	.placeholder {
