@@ -4,6 +4,45 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.5.0 — self-generated posters + metadata (opt-in via DATA_DIR)
+
+forya now generates its OWN posters and video metadata, so the public project
+stands on its own given just a library dir — no external importer needed.
+**Entirely opt-in:** with `DATA_DIR` unset (the default) the feature is fully
+dark — no ffmpeg ever spawns, nothing is written anywhere, and every response is
+byte-identical to before. The read-only `/srv/videos` contract is unchanged;
+forya writes only under `DATA_DIR`.
+
+### Added
+
+- **`DATA_DIR`** (new, optional): a writable dir forya owns for its generated
+  poster/metadata cache. Unset → feature off. The image declares `VOLUME /data`
+  (owned by `node`); enable with `-e DATA_DIR=/data -v forya-data:/data`.
+- **Metadata** (ffprobe): each video's width/height/duration, cached and added
+  **additively** to the feed manifest. The client uses width/height to **pre-set
+  object-fit before the video loads — killing the fit-jump** on off-aspect clips.
+- **Posters** (ffmpeg): a thumbnail (~0.5s frame) per video, served from the new
+  `GET /api/poster/<name>?v=<mtime>` route and shown in the placeholder until the
+  video reveals. The route is path-guarded (`safeMediaPath` + `lstat`, no symlink
+  escape), reads the cache only, and **degrades to `204` → the gradient
+  placeholder** when there's no poster yet (never 500s, never stalls).
+- **Background worker**: generation runs lazily and bounded so ffmpeg never
+  competes with serving — concurrency 1, single-flight per `name+mtime`, queued,
+  kicked on a poster cache-miss (no boot-time bulk encode), spawned at low
+  priority (`nice` + best-effort `ionice`). The ffmpeg spawn is never on a request
+  or Range path.
+
+### Build
+
+- Runtime image adds `ffmpeg`/`ffprobe` (~80MB, alpine; only used when
+  `DATA_DIR` is set). Base image is now **digest-pinned** (ffmpeg floats within
+  the alpine branch). Resolved at build: **ffmpeg 8.0.1**.
+
+### Notes
+
+- The serving core (`resolveRange`, the scan, `safeMediaPath`) is byte-unchanged;
+  the only serving-four edit is the additive `DATA_DIR` read in `config.ts`.
+
 ## 0.4.0 — playback resilience (autoplay cascade + load priority)
 
 Operator on-device found that a per-video iOS muted-autoplay rejection (some

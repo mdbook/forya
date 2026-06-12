@@ -113,6 +113,29 @@ rollback.
   a names-only readdir fingerprint (count + hash, mtime-independent) — not built,
   but the drop-in replacement. The `resolveRange`/Range surface of `videos.ts` is
   untouched by all of this (0.3.2 changed only the scan/cache block).
+- **Posters + metadata: forya's FIRST writable state, fully opt-in (0.5).** The
+  whole subsystem is gated on **`DATA_DIR`**: unset (`config.dataDir === ''`) →
+  no ffmpeg/ffprobe ever spawns, nothing is written anywhere, the manifest +
+  every `/api` response is byte-identical, and `/api/poster` 204s. Containment
+  keys on the **env var**, never on whether `/data` exists — proved by a
+  hard-test (`tests/dataCache.test.ts`: spies assert zero fs calls when disabled
+  even with a writable data dir present). forya writes **only** under `DATA_DIR`;
+  `/srv/videos` stays `:ro`. Pieces: `dataCache.ts` (atomic tmp+rename, name+mtime
+  key like the scan cache, validate-before-serve, never an empty/0-byte artifact);
+  `probe.ts` (ffprobe → width/height/duration, additively enriched onto the sent
+  PAGE only — `enrichItems` is identity when off, layered ON TOP of `scanVideos`,
+  so the Range core is byte-unchanged); `poster.ts` (ffmpeg → one ~0.5s mjpeg
+  frame, `isJpeg` SOI..EOI validate); `worker.ts` (the generator — concurrency 1,
+  single-flight by name+mtime, bounded, **fire-and-forget so ffmpeg is NEVER
+  awaited on a request/Range path**, kicked lazily by `/api/poster` on a cache
+  miss, no boot bulk-encode); `nicedExec.ts` (`nice -n 19` + best-effort
+  `ionice -c3` that **degrades to nice-only** if ionice is absent — no util-linux
+  dep). ffprobe/ffmpeg are behind injectable runner seams so tests mock them
+  (CI needs no ffmpeg). The ONLY serving-four touch is the additive `DATA_DIR`
+  read in `config.ts`. Image: `apk add ffmpeg` (resolved **ffmpeg 8.0.1** at the
+  digest-pinned base), `VOLUME /data` owned by `node` (named volume inherits it;
+  a bind mount is chowned 1000:1000 by the operator). Deploy sets `DATA_DIR` +
+  the volume via `update.sh` (a new env var → recreate, not a watchtower swap).
 - **Object-fit is symmetric (0.3.0).** `src/lib/fit.ts` `pickFit(vw, vh,
 viewportAR)` is pure (guarded by `tests/fit.test.ts`): it letterboxes
   (`contain`) once the clip/viewport aspect ratios diverge past `MAX_COVER_RATIO`

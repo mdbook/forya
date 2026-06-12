@@ -73,6 +73,13 @@ build`), `check` (svelte-check), `lint` (eslint), `format` / `format:check`
   localStorage and filters the feed; it does **not** delete or move files, so
   this contract holds. Don't turn it into a server-side disk mutation without an
   explicit decision to drop the `:ro` mount.
+- **`DATA_DIR` is the ONLY place forya may write (0.5), and it's opt-in.** The
+  poster/metadata subsystem writes its cache **only** under `DATA_DIR`; the
+  `:ro` source is never touched. Unset `DATA_DIR` = the feature is fully off
+  (no ffmpeg spawn, no writes, byte-identical responses) — keep that default-off
+  containment provable (it keys on the env var, not on `/data` existing). ffmpeg
+  generation must stay **off any request/Range path** (it's the background
+  worker's job, fire-and-forget). See `handoff.md`.
 - **HTTP Range correctness is the entire reason this app exists.** The pure
   resolver in `videos.ts` (`resolveRange`) and the `/api/media/[name]` route are
   guarded by **`tests/range.test.ts`** — both the byte math AND the real HTTP

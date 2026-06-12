@@ -62,8 +62,28 @@ All via environment variables:
 | `PRELOAD_AHEAD`  | `3`           | Lazy-load window: cards ahead of the active one that carry a video src. |
 | `PRELOAD_BEHIND` | `2`           | Lazy-load window: cards behind the active one kept warm.                |
 | `AUTO_ADVANCE`   | `false`       | Default for autoplay-next (advance on end vs. loop); user can toggle.   |
+| `DATA_DIR`       | _(unset)_     | Writable dir for generated posters/metadata (0.5). Unset = feature off. |
 | `PORT`           | `3000`        | Listen port (adapter-node native).                                      |
 | `HOST`           | `0.0.0.0`     | Listen host (adapter-node native).                                      |
+
+### Posters & metadata (optional, `DATA_DIR`)
+
+Set `DATA_DIR` to a writable dir and forya generates its own poster thumbnails +
+video metadata (width/height/duration) with ffmpeg/ffprobe — no external tooling
+needed. Metadata pre-sets object-fit (no fit-jump) and posters fill the loading
+placeholder. **Off by default:** with `DATA_DIR` unset nothing is generated or
+written and behaviour is identical to before. forya writes **only** under
+`DATA_DIR`; `/srv/videos` stays read-only. The image declares `VOLUME /data`
+(owned by `node`):
+
+```bash
+docker run -p 3000:3000 \
+  -v /my/videos:/srv/videos:ro -v forya-data:/data -e DATA_DIR=/data \
+  -e FEED_NAME=liked registry.mdbook.me/mikayla/forya
+```
+
+Generation is lazy (first view of a clip has no poster; later views do) and
+bounded (one ffmpeg at a time, low priority) so it never competes with playback.
 
 ### The `/srv/videos` contract
 
@@ -87,6 +107,7 @@ what the `/api/feed` endpoint still returns by default.
 - `GET /` — the feed UI.
 - `GET /api/feed` — JSON manifest: `{ feed, items: [{ name, url, size, mtime, type }] }`. `?shuffle=1&seed=N` for a deterministic shuffle; `?offset=O&limit=L` to paginate (used by the page's lazy-load). No params → the full mtime-desc list.
 - `GET|HEAD /api/media/<name>` — the video bytes, with full Range support.
+- `GET /api/poster/<name>?v=<mtime>` — the generated JPEG poster, or `204` when none yet (needs `DATA_DIR`).
 - `GET /api/healthz` — `200 ok` (healthcheck).
 - `GET /manifest.webmanifest` — the PWA manifest, branded with `FEED_NAME`.
 
