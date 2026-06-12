@@ -91,11 +91,28 @@ rollback.
     `/api/feed?shuffle=1&seed=<same>&offset&limit` (additive params; the no-param
     default contract is untouched). Threading the **same seed** makes
     `seededShuffle` deterministic, so each page continues the same order (client
-    dedupes by name). **Edge:** the ~10s scan memo means if `VIDEO_DIR` changes
-    mid-session the continuing order could shift (dupes/gaps); acceptable for a
-    homelab feed and fully stabilised by **0.3.2**'s persistent scan. The cold
-    ~9s scan on the biggest feed is the other half of the slow-load and is the
-    0.3.2 target (a `videos.ts` change → full Range re-gate).
+    dedupes by name). **Edge:** the scan cache (see below) re-scans only when the
+    dir changes, so within a stable dir the continuing order is consistent; an
+    add/remove mid-session re-scans and could shift the tail (dupes/gaps) —
+    acceptable for a homelab feed.
+- **Scan cache: dir-mtime invalidation + single-flight (0.3.2).** `scanVideos`
+  caches the directory walk in-process and invalidates it by the **directory's
+  mtime**, not a wall-clock TTL. The old ~10s TTL was _shorter_ than the largest
+  feed's ~9–13s scan, so it was born expired and re-scanned almost every request
+  (liked's ~9s cold load). A directory's mtime bumps on entry add/remove/rename —
+  exactly when the manifest changes, including the `.partial → final` rename — so
+  a stable dir scans **once** then serves instantly; a cheap `stat` per request
+  validates freshness. Concurrent requests **single-flight** (shared `inflight`
+  promise, registered synchronously before the first `await`, cleared on settle
+  so a failed scan retries rather than poisons) — a 3× burst no longer stacks to
+  35–41s. **In-memory only** — no new env, no writable volume, stateless image
+  (one cold scan per deploy is fine). **Edge:** a file changed in place _without_
+  an add/remove/rename won't bump the dir mtime → stale sort order until the next
+  entry change; negligible for write-once downloads. **Escape hatch** if a mount
+  ever fails to propagate entry changes to the dir mtime: swap the mtime key for
+  a names-only readdir fingerprint (count + hash, mtime-independent) — not built,
+  but the drop-in replacement. The `resolveRange`/Range surface of `videos.ts` is
+  untouched by all of this (0.3.2 changed only the scan/cache block).
 - **Object-fit is symmetric (0.3.0).** `src/lib/fit.ts` `pickFit(vw, vh,
 viewportAR)` is pure (guarded by `tests/fit.test.ts`): it letterboxes
   (`contain`) once the clip/viewport aspect ratios diverge past `MAX_COVER_RATIO`

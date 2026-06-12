@@ -108,6 +108,34 @@ describe('scanVideos', () => {
 	});
 });
 
+describe('scanVideos caching (0.3.2: dir-mtime invalidation + single-flight)', () => {
+	it('reuses the cache for an unchanged directory (same reference, no re-scan)', async () => {
+		await write('a.mp4');
+		const first = await scanVideos(dir, true);
+		const second = await scanVideos(dir, true);
+		expect(second).toBe(first); // same array ref → served from cache
+	});
+
+	it('re-scans when the directory changes (mtime bump)', async () => {
+		await write('a.mp4');
+		const first = await scanVideos(dir, true);
+		await write('b.mp4');
+		// Force the dir mtime forward so the bump is unambiguous regardless of
+		// filesystem timestamp granularity.
+		const bump = new Date(Date.now() + 10_000);
+		await fsp.utimes(dir, bump, bump);
+		const second = await scanVideos(dir, true);
+		expect(second).not.toBe(first);
+		expect(second.map((i) => i.name).sort()).toEqual(['a.mp4', 'b.mp4']);
+	});
+
+	it('single-flights concurrent scans into one shared result', async () => {
+		await write('a.mp4');
+		const [a, b] = await Promise.all([scanVideos(dir, true), scanVideos(dir, true)]);
+		expect(b).toBe(a); // both awaited the same in-flight scan
+	});
+});
+
 describe('safeMediaPath (traversal)', () => {
 	it('rejects separators, traversal, and NUL', () => {
 		expect(safeMediaPath('../../etc/passwd', dir)).toBeNull();
