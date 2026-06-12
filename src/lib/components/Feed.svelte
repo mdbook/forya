@@ -18,15 +18,29 @@
 	}: { items: FeedItem[]; feedName: string; settings: FeedSettings } = $props();
 
 	let activeIndex = $state(0);
+	let dir = $state(1); // travel direction: +1 scrolling down, -1 scrolling up
 	let muted = $state(true);
 	let feedEl = $state<HTMLElement>();
 	let cardEls = $state<HTMLElement[]>([]);
 
-	/** Reactive preload window: metadata for the previous card, active, and next
-	 *  two; none for everything else (iOS throttles many decoders). */
-	function preloadFor(index: number): 'metadata' | 'none' {
+	/**
+	 * Reactive lazy-load window that follows the active card. Only indices inside
+	 * `[active - behind, active + ahead]` carry a real `<video src>` (`live`),
+	 * which caps how many decoders iOS holds at once; everything else is a
+	 * srcless placeholder. The window is direction-biased: scrolling up swaps
+	 * ahead/behind so sustained back-scroll starts loading the previously-
+	 * uncached cards. The active card (d === 0) is ALWAYS live — so a j/k jump or
+	 * fast scroll to any index force-loads + plays it (no srcless active card).
+	 * Preload gradient: active + the immediate neighbour in the travel direction
+	 * buffer aggressively (`auto`); the rest of the window gets `metadata`.
+	 */
+	function windowState(index: number): { live: boolean; preload: 'auto' | 'metadata' | 'none' } {
+		const ahead = dir < 0 ? settings.preloadBehind : settings.preloadAhead;
+		const behind = dir < 0 ? settings.preloadAhead : settings.preloadBehind;
 		const d = index - activeIndex;
-		return d >= -1 && d <= 2 ? 'metadata' : 'none';
+		if (d < -behind || d > ahead) return { live: false, preload: 'none' };
+		const immediate = dir < 0 ? -1 : 1;
+		return { live: true, preload: d === 0 || d === immediate ? 'auto' : 'metadata' };
 	}
 
 	function activeVideo(): HTMLVideoElement | null {
@@ -92,7 +106,10 @@
 				for (const entry of entries) {
 					if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
 						const idx = Number((entry.target as HTMLElement).dataset.index);
-						if (!Number.isNaN(idx)) activeIndex = idx;
+						if (!Number.isNaN(idx) && idx !== activeIndex) {
+							dir = idx > activeIndex ? 1 : -1;
+							activeIndex = idx;
+						}
 					}
 				}
 			},
@@ -125,8 +142,9 @@
 {:else}
 	<div class="feed" bind:this={feedEl}>
 		{#each items as item, i (item.name)}
+			{@const ws = windowState(i)}
 			<div class="card" data-index={i} bind:this={cardEls[i]}>
-				<VideoCard {item} active={i === activeIndex} preload={preloadFor(i)} {muted} />
+				<VideoCard {item} active={i === activeIndex} live={ws.live} preload={ws.preload} {muted} />
 			</div>
 		{/each}
 	</div>

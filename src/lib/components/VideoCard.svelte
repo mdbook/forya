@@ -11,12 +11,17 @@
 	let {
 		item,
 		active,
+		live,
 		preload,
 		muted
 	}: {
 		item: FeedItem;
 		active: boolean;
-		preload: 'metadata' | 'none';
+		/** Inside the lazy-load window → carries a real `<video src>`. Outside →
+		 *  srcless placeholder (decoder released). The active card is ALWAYS live
+		 *  (Feed guarantees it), so it can always play. */
+		live: boolean;
+		preload: 'auto' | 'metadata' | 'none';
 		muted: boolean;
 	} = $props();
 
@@ -72,6 +77,20 @@
 		if (v) v.muted = muted;
 	});
 
+	// Leaving the window: the declarative `src` attribute is already gone (effects
+	// run after the DOM update), so load() resets the element to empty and frees
+	// the iOS decoder. Reset overlay state so the placeholder returns; re-entering
+	// the window rebinds `src` and reloads. The active card never hits this (it's
+	// always live), so playback is never interrupted by virtualization.
+	$effect(() => {
+		const v = el;
+		if (!v || live) return;
+		untrack(() => v.load());
+		loaded = false;
+		needsTap = false;
+		buffering = false;
+	});
+
 	function togglePlay() {
 		const v = el;
 		if (!v) return;
@@ -83,7 +102,7 @@
 <div class="media">
 	<video
 		bind:this={el}
-		src={item.url}
+		src={live ? item.url : undefined}
 		{preload}
 		muted
 		playsinline
