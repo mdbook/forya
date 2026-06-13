@@ -252,7 +252,8 @@
 		const vids = document.getElementsByTagName('video');
 		let data = 0;
 		for (const v of vids) if (v.readyState >= 2) data++;
-		debugCounts = `live=${vids.length} data=${data} active=${activeIndex} blk=${activeBlocked ? 1 : 0}`;
+		const sha = settings.buildSha ? settings.buildSha.slice(0, 8) : 'local';
+		debugCounts = `build=${sha} live=${vids.length} data=${data} active=${activeIndex} blk=${activeBlocked ? 1 : 0}`;
 	}
 
 	function onTouchStart(e: TouchEvent) {

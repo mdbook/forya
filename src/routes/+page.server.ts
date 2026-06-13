@@ -35,7 +35,8 @@ export const load: PageServerLoad = async () => {
 			preloadBehind: config.preloadBehind,
 			autoAdvance: config.autoAdvance,
 			posters: config.dataDir !== '',
-			debugPlayback: config.debugPlayback
+			debugPlayback: config.debugPlayback,
+			buildSha: config.buildSha
 		}
 	};
 };

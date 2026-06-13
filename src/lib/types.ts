@@ -50,4 +50,7 @@ export interface FeedSettings {
 	/** Diagnostic playback overlay (DEBUG_PLAYBACK, 0.5.4). Default false → the
 	 *  overlay never renders and VideoCard emits no debug events. */
 	debugPlayback: boolean;
+	/** Build commit SHA (0.5.4), shown in the debug overlay so a diagnostic deploy
+	 *  is unambiguous about which build is live. Empty for a local build. */
+	buildSha: string;
 }

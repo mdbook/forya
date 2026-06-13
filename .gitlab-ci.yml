@@ -89,6 +89,7 @@ build:
       /kaniko/executor
       --context "$CI_PROJECT_DIR"
       --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+      --build-arg BUILD_SHA="$CI_COMMIT_SHA"
       $IMAGE_DESTINATIONS
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
