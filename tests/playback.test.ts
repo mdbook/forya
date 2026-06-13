@@ -5,9 +5,7 @@
 // canplay/loadeddata and guards the attempt with its generation token.
 import { describe, expect, it } from 'vitest';
 import {
-	canStartPlayback,
 	HAVE_CURRENT_DATA,
-	HAVE_FUTURE_DATA,
 	isMediaReady,
 	shouldGestureUnlock,
 	shouldRetryOnPlayable
@@ -53,19 +51,6 @@ describe('isMediaReady (decoder-handover-race vs late-buffer)', () => {
 	it('treats below HAVE_CURRENT_DATA as not-yet-buffered (leave it to canplay)', () => {
 		expect(isMediaReady(0)).toBe(false); // HAVE_NOTHING
 		expect(isMediaReady(1)).toBe(false); // HAVE_METADATA
-	});
-});
-
-describe('canStartPlayback (0.5.4 — safe muted-autoplay threshold)', () => {
-	it('requires HAVE_FUTURE_DATA (3) or above — can play FORWARD, not just one frame', () => {
-		expect(canStartPlayback(HAVE_FUTURE_DATA)).toBe(true); // 3
-		expect(canStartPlayback(4)).toBe(true); // HAVE_ENOUGH_DATA
-	});
-
-	it('rejects HAVE_CURRENT_DATA (2) and below — one frame can still policy-reject', () => {
-		expect(canStartPlayback(HAVE_CURRENT_DATA)).toBe(false); // 2 — the key case
-		expect(canStartPlayback(1)).toBe(false); // HAVE_METADATA
-		expect(canStartPlayback(0)).toBe(false); // HAVE_NOTHING
 	});
 });
 

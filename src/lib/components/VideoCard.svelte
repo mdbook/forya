@@ -14,7 +14,7 @@
 	import { flushSync, onDestroy, untrack } from 'svelte';
 	import Play from '@lucide/svelte/icons/play';
 	import { pickFit } from '$lib/fit';
-	import { canStartPlayback, isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
+	import { isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
 	import type { FeedItem } from '$lib/types';
 
 	let {
@@ -239,21 +239,11 @@
 		if (active) {
 			untrack(() => {
 				// Fresh attempt on (re)activation: re-attach src if it was released by
-				// an earlier error, clear the blocked/errored affordances.
+				// an earlier error, clear the blocked/errored affordances, then play.
 				released = false;
 				errored = false;
 				blocked = false;
-				// Readiness-gate the FIRST play (0.5.4): only eager-play if the media can
-				// play FORWARD (readyState ≥ HAVE_FUTURE_DATA). A COLD activation play()
-				// (card the feed just scrolled to, not yet buffered) is what trips iOS's
-				// `NotAllowedError` autoplay-policy reject — and that first reject can
-				// revoke autoplay doc-wide (instrumentation #326: NotAllowedError is the
-				// TRIGGER, not decoder exhaustion — `live` stayed flat). HAVE_CURRENT_DATA
-				// (one frame) isn't enough — iOS can still reject an un-sustainable play —
-				// so we gate on `canStartPlayback` (≥3). If it's not there yet, DON'T
-				// eager-play; the `canplay` self-heal (`retryIfPlayable`) plays it the
-				// moment it can, so the first play() always lands forward-playable.
-				if (canStartPlayback(v.readyState)) tryPlay(v);
+				tryPlay(v);
 			});
 		} else {
 			untrack(() => {
@@ -323,16 +313,7 @@
 	// `released`) card was missing — it never went dark, it just hadn't buffered.
 	function retryIfPlayable() {
 		const v = el;
-		// Gate the self-heal play on `canStartPlayback` (≥3, 0.5.4) too: `loadeddata`
-		// fires at readyState 2 (one frame), which can still policy-reject; only play
-		// once `canplay` (3) reports forward-playable. Same safe threshold as the
-		// activation gate, so no automatic play() ever fires cold.
-		if (
-			v &&
-			canStartPlayback(v.readyState) &&
-			shouldRetryOnPlayable({ active, paused, hasPlayed, errored })
-		)
-			tryPlay(v);
+		if (v && shouldRetryOnPlayable({ active, paused, hasPlayed, errored })) tryPlay(v);
 	}
 </script>
 
