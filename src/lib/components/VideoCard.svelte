@@ -14,6 +14,7 @@
 	import { flushSync, onDestroy, untrack } from 'svelte';
 	import Play from '@lucide/svelte/icons/play';
 	import { pickFit } from '$lib/fit';
+	import { isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
 	import type { FeedItem } from '$lib/types';
 
 	let {
@@ -61,11 +62,18 @@
 	// two can never stack (the "buffer behind play button" bug).
 	let blocked = $state(false);
 	let paused = $state(false);
-	// `released` (0.4): a definitively-failed autoplay drops its `src` to free the
-	// iOS decoder so it can't poison the NEXT card (the autoplay cascade). The
-	// reveal-gate already shows the placeholder, so nothing visual is lost; a tap
-	// (or re-activation) re-attaches `src` and retries.
+	// `released` (0.4): drops the `src` to free the iOS decoder so a dead element
+	// can't poison the NEXT card (the autoplay cascade). As of 0.5.1 this is set
+	// ONLY by a genuine media `error` (or unmount) — NOT by a transient play()
+	// rejection, which is usually just a not-yet-buffered card the feed scrolled to.
+	// The reveal-gate already shows the placeholder, so nothing visual is lost; a
+	// tap (or re-activation) re-attaches `src` and retries.
 	let released = $state(false);
+	// `errored` (0.5.1): a real media/decode `error` fired. Distinct from a
+	// transient play() rejection — it gates the `canplay`/`loadeddata` self-heal
+	// (don't loop trying to play a genuinely broken source; recovery there is a tap
+	// or re-activation). Cleared on (re)activation and on a user tap.
+	let errored = $state(false);
 	// Monotonic token that cancels stale async play retries (0.4). Bumped on every
 	// fresh attempt, on going inactive, and on destroy — a retry whose token is
 	// stale no-ops, so a scrolled-past / unmounted card never replays its decode
@@ -172,10 +180,30 @@
 					.catch((err2: unknown) => {
 						if (gen !== playGen || !active) return;
 						if (err2 instanceof DOMException && err2.name === 'AbortError') return;
-						// Definitive failure → surface tap-to-play AND release the decoder
-						// so this card can't poison the next one.
+						// Still failing after the rAF retry → surface tap-to-play, but DON'T
+						// release the decoder (0.5.1): usually just a not-yet-buffered card the
+						// feed scrolled to, so keep `src` and let `canplay`/`loadeddata` re-attempt
+						// once the media is ready (`retryIfPlayable`). A genuine decode error
+						// releases via the element's `onerror` — that's the real cascade case.
 						blocked = true;
-						released = true;
+						// Pure-race edge (0.5.1): if the media is ALREADY playable here, this
+						// wasn't a buffering gap — it lost a decoder-handover race, and
+						// canplay/loadeddata already fired so the event self-heal can't catch
+						// it. Do ONE bounded, gen-guarded delayed re-attempt (not polling) to
+						// break the race; a not-yet-buffered card (readyState below current-
+						// data) is left to the canplay path instead.
+						if (el && isMediaReady(el.readyState)) {
+							setTimeout(() => {
+								if (gen !== playGen || !active || !el) return;
+								el.play()
+									.then(() => {
+										if (gen === playGen) blocked = false;
+									})
+									.catch(() => {
+										/* leave blocked → tap-to-play; one delayed retry only */
+									});
+							}, 250);
+						}
 					});
 			});
 		});
@@ -189,8 +217,9 @@
 		if (active) {
 			untrack(() => {
 				// Fresh attempt on (re)activation: re-attach src if it was released by
-				// an earlier failure, clear the blocked affordance, then play.
+				// an earlier error, clear the blocked/errored affordances, then play.
 				released = false;
+				errored = false;
 				blocked = false;
 				tryPlay(v);
 			});
@@ -232,11 +261,26 @@
 			}
 			paused = false;
 			blocked = false;
+			errored = false; // a user tap is a fresh attempt — re-enable canplay self-heal
 			tryPlay(v);
 		} else {
 			v.pause();
 			paused = true;
 		}
+	}
+
+	// Self-heal (0.5.1): the `<video>`'s `canplay`/`loadeddata` fire when the media
+	// becomes playable — which, for the active card, is typically AFTER the eager
+	// activation play() attempt already rejected (a freshly-mounted card the feed
+	// scrolled to, loading over a slow CIFS origin; the 0.4.0 single-rAF retry is
+	// far too early). Re-attempt then, but only if the card still wants to play
+	// (`shouldRetryOnPlayable`, pure + tested). `tryPlay` bumps the generation
+	// token, so a stale/inactive card no-ops and a success flips `hasPlayed` →
+	// further fires short-circuit. This is the recovery a `blocked` (no longer
+	// `released`) card was missing — it never went dark, it just hadn't buffered.
+	function retryIfPlayable() {
+		const v = el;
+		if (v && shouldRetryOnPlayable({ active, paused, hasPlayed, errored })) tryPlay(v);
 	}
 </script>
 
@@ -253,6 +297,8 @@
 		class:revealed={hasPlayed}
 		class:contain={fit === 'contain'}
 		onloadedmetadata={() => readDimensions(el!)}
+		oncanplay={retryIfPlayable}
+		onloadeddata={retryIfPlayable}
 		onended={() => {
 			if (active && autoAdvance) onfinished();
 		}}
@@ -260,8 +306,11 @@
 		onerror={() => {
 			// A media/decode error must not leave an eternal spinner or hold a
 			// poisoned pipeline: release the decoder; surface tap-to-play if active.
+			// `errored` (0.5.1) stops the canplay/loadeddata self-heal from looping on
+			// a genuinely broken source — recovery there is a tap or re-activation.
 			buffering = false;
 			released = true;
+			errored = true;
 			if (active) blocked = true;
 		}}
 		onplay={() => {

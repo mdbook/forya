@@ -4,6 +4,34 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.5.1 — autoplay self-heal + worker key cleanup
+
+Fixes two pre-existing (0.4.x) iOS autoplay residuals the operator hit on-device:
+a fast-scroll-settled card that stayed dark, and an isolated `play()` rejection
+on an otherwise-conformant clip. Both traced to the same root — the 0.4.0
+single-`requestAnimationFrame` retry (~16ms) is far too short for a freshly-
+mounted card's first buffer over a slow origin, after which the card released its
+decoder with no way to recover. Frontend only; the serving layer (Range/media/
+config/scan) is byte-untouched, and the 0.4.0 cascade guard is intact.
+
+### Fixed
+
+- **Autoplay self-heal:** the active `<video>` now re-attempts play on
+  `canplay`/`loadeddata` (when the media reports it can play) via the pure,
+  tested `shouldRetryOnPlayable` (`src/lib/playback.ts`) — so a settled-but-not-
+  yet-buffered card plays the moment it's ready instead of going dark. For the
+  complementary case — an already-buffered clip that lost a decoder-handover race
+  (where `canplay` already fired and won't re-fire) — a single bounded,
+  generation-guarded delayed re-attempt fires when `isMediaReady(readyState)` at
+  rejection time. The two paths are mutually exclusive by `readyState`.
+- **Release only on real errors:** a transient `play()` rejection now surfaces
+  tap-to-play but keeps `src` (so the self-heal can fire). Dropping `src` to free
+  the decoder is reserved for a genuine media `error` (the actual cascade case)
+  and for unmount — unchanged.
+- **Worker job key:** the single-flight key separator was a literal NUL byte,
+  which flagged `worker.ts` as binary to git; switched to a space (no behaviour
+  change).
+
 ## 0.5.0 — self-generated posters + metadata (opt-in via DATA_DIR)
 
 forya now generates its OWN posters and video metadata, so the public project

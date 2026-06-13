@@ -181,6 +181,24 @@ is operator-on-device, criterion 3):
   transiently reject before it's ready). Only if the retry also fails does the
   manual play button show. (0.4 removed the old `playback.unlocked` flag — it had
   no readers once the retry became unconditional.)
+- **Self-heal on playable (0.5.1) — the rAF retry isn't the last word.** The
+  `<video>`'s `canplay`/`loadeddata` re-attempt play via the pure
+  `shouldRetryOnPlayable` (`src/lib/playback.ts`, guarded by
+  `tests/playback.test.ts`): for the active card these fire when the media is
+  finally buffered, which is typically AFTER the ~16ms rAF retry already gave up
+  on a freshly-scrolled-to card over a slow CIFS origin — so the card plays the
+  moment it can instead of sitting dark. `tryPlay` bumps `playGen`, so stale fires
+  no-op and a success (`hasPlayed`) short-circuits further retries; the predicate
+  requires `active && !paused && !hasPlayed && !errored`, so it never overrides a
+  user pause or loops on a hard error. **Plus a complementary race path:** if a
+  `play()` rejection happens when the media is ALREADY playable
+  (`isMediaReady(el.readyState)` — a lost decoder-handover race, where
+  `canplay`/`loadeddata` already fired and won't re-fire), `tryPlay` schedules ONE
+  bounded gen-guarded delayed re-attempt (~250ms, not polling). The two paths are
+  mutually exclusive by `readyState`: a not-yet-buffered card waits on `canplay`,
+  an already-buffered one gets the delayed retry. Together these fixed the two
+  pre-existing 0.4.x on-device residuals (fast-scroll-settled card dark; isolated
+  rejection on a conformant clip).
 - **Cascade guards (0.4) — a failed autoplay must not break the NEXT card.**
   `VideoCard` has three guards, all in the play path: (1) **generation token**
   `playGen` — every attempt takes `gen = ++playGen`; the rAF retry + both
@@ -188,12 +206,16 @@ is operator-on-device, criterion 3):
   `onDestroy` bump `playGen`, so a scrolled-past / unmounted card can't keep
   replaying its decode on top of the next card's startup. `AbortError`
   (pause/load-interrupted play) is treated as benign — never marks `blocked`. (2)
-  **decoder release on definitive failure** — when the retry also rejects (or
-  `onerror` fires), `released = true` drops `src` (`src={released ? undefined :
-item.url}`) to free the iOS decoder so a bad clip can't poison the next; a tap
-  (`togglePlay`, with `flushSync` to re-attach `src` inside the gesture) or
-  re-activation clears it and retries. (3) **`onerror`** handles a `MediaError`
-  (release + tap-to-play) instead of an eternal spinner. Root cause was an
+  **decoder release on a real error** — `released = true` drops `src`
+  (`src={released ? undefined : item.url}`) to free the iOS decoder so a bad clip
+  can't poison the next; a tap (`togglePlay`, with `flushSync` to re-attach `src`
+  inside the gesture) or re-activation clears it and retries. **As of 0.5.1 this
+  is reserved for a genuine media `error` (or unmount), NOT a transient play()
+  rejection** — a rejection now just shows tap-to-play and keeps `src` so the
+  `canplay` self-heal above can fire (dropping `src` would have killed its own
+  recovery). (3) **`onerror`** handles a `MediaError` (release + `errored` +
+  tap-to-play) instead of an eternal spinner; `errored` also stops the self-heal
+  from looping on a broken source. Root cause was an
   un-cancelled retry + a never-released failed element + an eager `preload=auto`
   neighbour decoding during the failure — see the readiness gate next.
 - **Readiness-gated preload (0.4) — load the current video first.** `feedWindow`
