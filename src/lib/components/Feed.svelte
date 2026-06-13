@@ -577,6 +577,24 @@
 		}
 	}
 
+	// ── #3b foreground re-drive (0.6.2) ─────────────────────────────────────────────
+	// iOS pauses inline <video> when the tab/app backgrounds; on return nothing re-drives the
+	// pool, so a becoming-active card can land on a silently-PAUSED element — the exact pause→
+	// play transition the continuously-playing pool exists to avoid. Re-drive by REUSING
+	// driveActive() (no new play path): neighbours resume muted (v.paused→play()), the active
+	// card resumes via tryPlayActive. activeIndex is unchanged so fresh=false → NO t=0 restart
+	// (the user keeps their place). Cure-shape intact: all driveActive plays are muted, and
+	// onActivePlaying→assertActiveAudio's unmute is the D-safe toggle on an already-playing
+	// blessed element, NOT an ungestured play() — guarantee-safe whether or not the per-element
+	// bless survived backgrounding (the audio-after-background outcome is empirical, read off
+	// the overlay on-device; the muted-only fallback is one branch away if iOS revokes it).
+	// Guarded against an empty pool/feed; idempotent (coarse event, no debounce needed).
+	function onForeground() {
+		if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+		if (!pool.length || visible.length === 0) return;
+		driveActive();
+	}
+
 	function prefersReducedMotion(): boolean {
 		return (
 			typeof window !== 'undefined' &&
@@ -828,6 +846,12 @@
 		feedEl?.addEventListener('touchmove', onTouchMove, { passive: true });
 		feedEl?.addEventListener('touchend', onTouchEnd, { passive: true });
 
+		// #3b — re-drive the pool when the tab/app returns to the foreground. iOS pauses inline
+		// <video> on background; visibilitychange covers tab-switch/lock, pageshow covers iOS
+		// bfcache (back-forward) restore (which visibilitychange may not fire for).
+		document.addEventListener('visibilitychange', onForeground);
+		window.addEventListener('pageshow', onForeground);
+
 		if (settings.debugPlayback) {
 			sampleDebug();
 			debugTimer = setInterval(sampleDebug, 500);
@@ -838,6 +862,8 @@
 			feedEl?.removeEventListener('touchstart', onTouchStart);
 			feedEl?.removeEventListener('touchmove', onTouchMove);
 			feedEl?.removeEventListener('touchend', onTouchEnd);
+			document.removeEventListener('visibilitychange', onForeground);
+			window.removeEventListener('pageshow', onForeground);
 			clearTimeout(undoTimer);
 			clearTimeout(modeTimer);
 			clearTimeout(copyTimer);
