@@ -7,9 +7,16 @@
 	// released on unmount), Feed owns a small fixed POOL of persistent `<video>` elements
 	// (see src/lib/pool.ts) and reparents them onto the active card + its neighbours,
 	// recycling via `src`-swap as the active index moves. This is what lets a gesture-
-	// blessed element carry sound across cards (M2); M1 is the structural move, muted-only,
-	// to prove the always-muted cure + the serving-four Range path survive the rearchitect.
-	// Decoder count is now bounded by POOL_SIZE (< the old ~6 windowed mounts).
+	// blessed element carry sound across cards AND across programmatic auto-advance (M2).
+	// Blessing model (harness-proven on iOS 26.5.1, bus #422): iOS's "may-play-unmuted"
+	// permission is PER-ELEMENT + durable — a continuously-playing element unmuted once in a
+	// gesture (section A) carries sound across ≥6 src-swaps + a 20s idle; an off-gesture
+	// muted→unmuted toggle on such a blessed element never re-pauses (section D). So the
+	// sound-on tap blesses the whole pool (unmute+play each in-gesture, re-mute neighbours),
+	// neighbours stay continuously playing muted, and becoming-active is just a D-safe
+	// off-gesture unmute. The always-muted cure (0.5.5) is preserved: we NEVER issue an
+	// unmuted play() off-gesture — play() is always muted, unmute happens only once the
+	// element is confirmed playing. Decoder count is bounded by POOL_SIZE (< the old ~6).
 	import { onMount, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import VideoCard from './VideoCard.svelte';
@@ -18,7 +25,6 @@
 	import Copy from '@lucide/svelte/icons/copy';
 	import type { FeedItem, FeedSettings } from '$lib/types';
 	import {
-		loadMute,
 		saveMute,
 		loadInfo,
 		saveInfo,
@@ -109,6 +115,10 @@
 	// reveal state are the reactive surface the shells read.
 	const POOL_SIZE = 3;
 	let pool: HTMLVideoElement[] = [];
+	// Set true the first time the user turns sound on (the bless gesture). Durable for the
+	// session: every pool element is blessed once and the per-element grant survives src-swaps,
+	// so no element is ever unblessed again. Plain (non-reactive) — read only imperatively.
+	let blessed = false;
 	let slotToCard: (number | null)[] = new Array(POOL_SIZE).fill(null); // pool slot → card idx
 	// Shell slot divs keyed by the STABLE item name (not index): `use:` actions fire only
 	// on mount/destroy, so a hide/undo or lazy-append that shifts indices must not strand a
@@ -143,16 +153,20 @@
 	// autoplay is gesture-free; a transient reject on a freshly-(re)src'd element retries
 	// once on the next frame, then surfaces tap-to-play (`blocked`) without releasing —
 	// canplay/loadeddata self-heal (`retryIfPlayable`) catches the not-yet-buffered case.
-	// All callbacks gen-guarded so a scrolled-past attempt no-ops. NEVER unmutes here
-	// (sound-on carry is M2: bless the pool in a gesture, then unmute the active element).
+	// All callbacks gen-guarded so a scrolled-past attempt no-ops. The play() call is ALWAYS
+	// muted (the cure — never an unmuted play() off-gesture); the sound-on unmute happens in
+	// onActivePlaying() once the element is confirmed playing (D-safe on a blessed element).
 	function tryPlayActive(v: HTMLVideoElement) {
 		if (!v.isConnected) return; // not parked into a slot yet
 		const gen = ++playGen;
-		v.muted = true;
+		// Only force muted on a fresh/paused start (the cure). A neighbour that's already
+		// playing muted (post-bless) is left as-is so play() is a no-op and onActivePlaying
+		// just unmutes it — no mute→unmute blip on the becoming-active transition.
+		if (v.paused) v.muted = true;
 		const p = v.play();
 		if (!p || typeof p.then !== 'function') return;
 		p.then(() => {
-			if (gen === playGen) activeBlocked = false;
+			if (gen === playGen) onActivePlaying();
 		}).catch((err: unknown) => {
 			if (gen !== playGen) return;
 			if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -162,7 +176,7 @@
 				cur
 					.play()
 					.then(() => {
-						if (gen === playGen) activeBlocked = false;
+						if (gen === playGen) onActivePlaying();
 					})
 					.catch((err2: unknown) => {
 						if (gen !== playGen) return;
@@ -175,7 +189,7 @@
 								if (gen !== playGen || !c2) return;
 								c2.play()
 									.then(() => {
-										if (gen === playGen) activeBlocked = false;
+										if (gen === playGen) onActivePlaying();
 									})
 									.catch(() => {
 										/* leave blocked → tap-to-play; one delayed retry only */
@@ -187,6 +201,21 @@
 		});
 	}
 
+	// The active element is audible iff the pool is blessed AND sound is on (muted pref false);
+	// everything else stays muted. Setting muted=false here is the D-safe off-gesture toggle on
+	// a blessed element — only ever called once the element is confirmed playing (the audible-
+	// output gate cares about playing state, not the play() call). Pre-bless this always mutes,
+	// preserving the cure.
+	function assertActiveAudio() {
+		const v = activeVideo();
+		if (v) v.muted = !(blessed && !muted);
+	}
+	// The active element is confirmed playing: clear the blocked/buffering UI and apply audio.
+	function onActivePlaying() {
+		activeBlocked = false;
+		assertActiveAudio();
+	}
+
 	// Per-element listeners (bound once at creation; `slot` is the fixed pool index). They
 	// only touch the reactive active-state when THIS slot is the active one, so a
 	// neighbour's events can't clobber the active card's UI.
@@ -196,7 +225,12 @@
 		pool[slot]?.classList.add('revealed');
 		if (slot === slotForCard(activeIndex)) {
 			activeBuffering = false;
-			activeBlocked = false;
+			onActivePlaying();
+		} else {
+			// Neighbour started playing: re-assert muted (some iOS reset muted to the attribute
+			// default on a src-swap; the attribute is unset, so the default is UNMUTED — guard it
+			// here so a recycled neighbour can never bleed audio).
+			pool[slot].muted = true;
 		}
 	}
 	function onPoolError(slot: number) {
@@ -241,9 +275,15 @@
 				}
 				v.classList.remove('revealed');
 				v.loop = !autoAdvance;
-				v.muted = true; // cure: re-assert muted on every swap (M1: always muted)
 				applyFit(v, item);
 				v.src = item.url;
+				// Re-assert muted AFTER the src-swap (some iOS reset muted to the attribute
+				// default — unset = unmuted — on swap). muted=true is the safe default: on an
+				// adjacent scroll the recycled slot is always the off-screen far neighbour; on a
+				// jump it may be the new active card, in which case driveActive→onActivePlaying
+				// unmutes it once playing. Either way the per-element blessing survives the swap
+				// (harness A).
+				v.muted = true;
 			}
 			// (Re)park into the card's shell slot (resolved by stable name).
 			const slotDiv = cardSlotByName[item.name] ?? null;
@@ -256,7 +296,18 @@
 	function driveActive() {
 		const aSlot = slotForCard(activeIndex);
 		for (let s = 0; s < pool.length; s++) {
-			if (s !== aSlot) pool[s].pause();
+			if (s === aSlot) continue;
+			const v = pool[s];
+			v.muted = true; // neighbours are always silent
+			if (blessed && v.src) {
+				// Post-bless: keep neighbours CONTINUOUSLY playing (muted) so that when one
+				// becomes active it's an off-gesture unmute on an already-playing blessed element
+				// (harness D), never a pause→play→unmute (untested). This is the TikTok recycler.
+				if (v.paused) v.play().catch(() => {});
+			} else {
+				// Pre-bless (muted feed, M1 behaviour): only the active card plays (battery).
+				v.pause();
+			}
 		}
 		if (aSlot < 0) return;
 		const v = pool[aSlot];
@@ -351,9 +402,8 @@
 	}
 
 	// ── Gesture-unlock (0.5.3) — document-wide iOS autoplay recovery, now on the pooled
-	// active element. On a real scroll-drag landing on a `blocked` active card, re-attempt
-	// play() SYNCHRONOUSLY in the gesture so iOS re-grants. Fires only on a moved touch
-	// (not a stationary tap — togglePlay owns those). M2 adds the sound-on bless here.
+	// active element. On a real scroll-drag, re-attempt play() SYNCHRONOUSLY in the gesture so
+	// iOS re-grants. Fires only on a moved touch (not a stationary tap — tapActive owns those).
 	let touchStartY = 0;
 	let touchMoved = false;
 
@@ -365,10 +415,20 @@
 		if (Math.abs((e.touches[0]?.clientY ?? touchStartY) - touchStartY) > 10) touchMoved = true;
 	}
 	function onTouchEnd() {
-		if (!touchMoved || !activeBlocked) return;
-		activeVideo()
-			?.play()
-			.catch(() => {});
+		if (!touchMoved) return;
+		// In-gesture: if sound is on, re-assert the active element unmuted here — a real gesture
+		// re-blesses it should a per-element grant ever lapse (belt-and-suspenders over the
+		// durable per-element blessing). Then recover a blocked active card with an in-gesture
+		// play() so iOS re-grants playback.
+		if (blessed && !muted) {
+			const v = activeVideo();
+			if (v) v.muted = false;
+		}
+		if (activeBlocked) {
+			activeVideo()
+				?.play()
+				.catch(() => {});
+		}
 	}
 
 	function scrollTo(index: number) {
@@ -389,11 +449,38 @@
 		}
 	}
 
+	// Bless the whole pool in the current user gesture: unmute + play() each element (so each
+	// is "playing + unmuted in a gesture" — harness A's precondition for a durable per-element
+	// grant), then immediately re-mute the neighbours (harness D: false→true on a blessed,
+	// playing element never re-pauses). MUST be called synchronously from a real gesture
+	// (toggleMute's click / a touchend). Idempotent-safe but only the first call matters.
+	function blessPool() {
+		blessed = true;
+		const aSlot = slotForCard(activeIndex);
+		for (let s = 0; s < pool.length; s++) {
+			const v = pool[s];
+			if (!v.src) continue;
+			v.muted = false; // unmute IN-gesture — this is the bless (per-element, durable)
+			const p = v.play();
+			if (p && typeof p.then === 'function') p.catch(() => {});
+			if (s !== aSlot) v.muted = true; // re-mute neighbours at once (no multi-audio blip)
+		}
+	}
+
 	function toggleMute() {
-		// M1 is muted-only (structural rearchitecture). The pref still toggles + persists so
-		// the rail icon reflects intent; the bless (unmute the blessed pool, in this gesture)
-		// lands in M2 atop this same handler.
 		muted = !muted;
+		if (!muted) {
+			// Turning sound ON. The first time, this click is the bless gesture for the whole
+			// pool; thereafter the elements stay blessed, so just unmute the active one (D-safe).
+			if (!blessed) blessPool();
+			else {
+				const v = activeVideo();
+				if (v) v.muted = false;
+			}
+		} else {
+			// Muting: silence everything (active + the continuously-playing neighbours).
+			for (const v of pool) v.muted = true;
+		}
 	}
 
 	function seekActiveFrac(frac: number) {
@@ -447,12 +534,20 @@
 		let data = 0;
 		for (const v of vids) if (v.readyState >= 2) data++;
 		const sha = settings.buildSha ? settings.buildSha.slice(0, 8) : 'local';
-		debugCounts = `build=${sha} pool=${pool.length} live=${vids.length} data=${data} active=${activeIndex} blk=${activeBlocked ? 1 : 0}`;
+		// snd = active element actually unmuted (the M2 sound-carry proof: should track the
+		// blessed sound-on state across scroll + auto-advance). bless = pool blessed this session.
+		const snd = activeVideo()?.muted === false ? 1 : 0;
+		debugCounts = `build=${sha} pool=${pool.length} live=${vids.length} data=${data} active=${activeIndex} blk=${activeBlocked ? 1 : 0} bless=${blessed ? 1 : 0} snd=${snd}`;
 	}
 
 	onMount(() => {
 		readViewport();
-		muted = loadMute(feedName);
+		// Always start muted: a page load recreates the pool as fresh, unblessed elements, so
+		// iOS requires a new "tap for sound" gesture every session regardless of any saved pref
+		// (the per-element blessing can't survive element re-creation). Starting muted keeps the
+		// rail icon honest and makes the first tap the bless gesture (no two-tap). saveMute still
+		// persists within-session intent.
+		muted = true;
 		infoOpen = loadInfo(feedName);
 		autoAdvance = loadAutoAdvance(feedName, settings.autoAdvance);
 		for (const n of loadHidden(feedName)) hidden.add(n);
