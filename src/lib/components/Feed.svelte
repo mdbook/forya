@@ -9,6 +9,7 @@
 	import VideoCard from './VideoCard.svelte';
 	import ActionRail from './ActionRail.svelte';
 	import Undo2 from '@lucide/svelte/icons/undo-2';
+	import Copy from '@lucide/svelte/icons/copy';
 	import type { FeedItem, FeedSettings } from '$lib/types';
 	import {
 		loadMute,
@@ -103,6 +104,10 @@
 	// undo-toast styling). Null when no toast is showing.
 	let modeToast = $state<string | null>(null);
 	let modeTimer: ReturnType<typeof setTimeout> | undefined;
+	// Transient "Copied ✓" after tapping the info-panel ID (so the operator can
+	// grab a clip ID to report which ones misbehave). Null when not showing.
+	let copyToast = $state(false);
+	let copyTimer: ReturnType<typeof setTimeout> | undefined;
 	let infoOpen = $state(false);
 	// Initial value is set from settings (or the stored pref) in onMount; the
 	// literal here is just the pre-hydration placeholder (no video has ended yet).
@@ -134,6 +139,23 @@
 
 	function toggleInfo() {
 		infoOpen = !infoOpen;
+	}
+
+	/** Copy the active clip's ID (the `/api/media` filename) to the clipboard so a
+	 *  breaking clip is easy to report. `navigator.clipboard` works on iOS Safari
+	 *  over HTTPS; if it's unavailable/blocked we stay silent and rely on the ID
+	 *  being `user-select:text` (long-press → Copy) rather than claim a false
+	 *  success. */
+	async function copyId(name: string | undefined) {
+		if (!name || !navigator.clipboard) return;
+		try {
+			await navigator.clipboard.writeText(name);
+			copyToast = true;
+			clearTimeout(copyTimer);
+			copyTimer = setTimeout(() => (copyToast = false), 1500);
+		} catch {
+			/* clipboard blocked — long-press-copy still works via user-select:text */
+		}
 	}
 
 	function formatBytes(n: number): string {
@@ -258,6 +280,7 @@
 			io?.disconnect();
 			clearTimeout(undoTimer);
 			clearTimeout(modeTimer);
+			clearTimeout(copyTimer);
 		};
 	});
 
@@ -347,7 +370,10 @@
 	/>
 	{#if infoOpen && activeItem}
 		<div class="info-overlay">
-			<p class="info-name">{activeItem.name}</p>
+			<button class="info-name" onclick={() => copyId(activeItem.name)} title="Copy ID">
+				<span class="info-id">{activeItem.name}</span>
+				<Copy size={13} aria-hidden="true" />
+			</button>
 			<p class="info-meta">{formatBytes(activeItem.size)} · {activeItem.type}</p>
 		</div>
 	{/if}
@@ -365,6 +391,10 @@
 
 {#if modeToast}
 	<div class="mode-toast" role="status">{modeToast}</div>
+{/if}
+
+{#if copyToast}
+	<div class="mode-toast" role="status">Copied ID ✓</div>
 {/if}
 
 <style>
@@ -415,11 +445,40 @@
 		pointer-events: none;
 	}
 
+	/* The ID row is a tap-to-copy button. The overlay is pointer-events:none, so
+	   re-enable events here; the icon hints the affordance and the id itself is
+	   user-select:text so a long-press → Copy works if the clipboard API is
+	   blocked. */
 	.info-name {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
 		margin: 0;
+		padding: 0;
+		font: inherit;
 		font-size: 0.85rem;
 		font-weight: 600;
+		color: inherit;
+		text-align: left;
 		word-break: break-word;
+		background: none;
+		border: 0;
+		cursor: pointer;
+		pointer-events: auto;
+	}
+
+	.info-name :global(svg) {
+		flex: none;
+		opacity: 0.6;
+	}
+
+	.info-name:active {
+		opacity: 0.7;
+	}
+
+	.info-id {
+		user-select: text;
+		-webkit-user-select: text;
 	}
 
 	.info-meta {
