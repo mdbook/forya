@@ -20,10 +20,20 @@ overlay pinned the reject as `NotAllowedError`, not decode/resource/readiness.)
   unconditionally), so it's gesture-free and never trips `NotAllowedError`. The
   persisted sound preference no longer reaches a fresh autoplay — restoring the
   criterion-3 gesture-free-muted-autoplay contract.
-- **Sound-on is honored by unmuting only the ACTIVE card, inside a gesture**
-  (`toggleMute`, and the `touchend` handler so sound carries across scrolls) — a
-  property set on an already-playing element, never a `play()`, so it can't
-  re-trip the gate. The mute `$effect` no longer reactively unmutes.
+- **Sound-on is honored by unmuting only the ACTIVE card, once it's confirmed
+  playing** (`VideoCard`'s `onplaying` handler, gated on the sound-on pref) and
+  via `toggleMute` — a property set on an already-playing element, never a
+  `play()`, so it can't re-trip the gate. The mute `$effect` never reactively
+  unmutes.
+- **Sound-on carry fixed (on-device follow-up):** the first cut unmuted from the
+  `touchend` handler, but `touchend` fires at finger-lift — _before_ the
+  scroll-snap settles — so it unmuted the card scrolling away (mid-snap), not the
+  one that settles active (a brief audio blip, then a silent settled card; the
+  mute button likewise didn't carry to the next card). Unmuting now happens on the
+  **settled** card's `onplaying`, backed by the recent scroll gesture's iOS
+  sticky-activation window, so sound carries card→card. (Auto-advance is
+  programmatic, not a gesture, so an auto-advanced card can stay muted until the
+  next interaction — an inherent iOS constraint.)
 
 ## 0.5.4 — gesture-unlock two-tap fix + playback instrumentation
 

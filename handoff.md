@@ -189,14 +189,22 @@ is operator-on-device, criterion 3):
   `NotAllowedError` → autoplay revoked document-wide until a gesture (confirmed
   on-device: a muted feed scrolls infinitely clean; the `DEBUG_PLAYBACK` overlay
   pinned the reject as `NotAllowedError`). Sound-on is honoured by unmuting **only
-  the active card, inside a user gesture** (`Feed.toggleMute`, and the `touchend`
-  handler so sound carries across scrolls) — that's a property set on an
-  already-playing element, never a `play()`, so it can't re-trip the gate. The mute
-  `$effect` only ever (re)mutes; it never reactively unmutes. **Never set
-  `v.muted = false` outside a gesture, and never feed the mute pref into a `play()`
-  path.** This is the prevention that superseded chasing it via gesture-unlock
-  recovery (the 0.5.3 gesture-unlock stays as a belt-and-suspenders for any residual
-  transient reject).
+  the active card, once it's CONFIRMED playing** — `VideoCard`'s `onplaying` handler
+  sets `v.muted = false` when the sound-on pref is set (plus `Feed.toggleMute` for
+  the button). That's a property set on an already-playing element, never a
+  `play()`, so it can't re-trip the gate. **Why `onplaying` and not `touchend`
+  (0.5.5 on-device fix):** `touchend` fires at finger-lift, BEFORE the scroll-snap
+  settles, so it unmuted the card scrolling _away_ (mid-snap) — a brief audio blip,
+  then the settled card stayed silent, and the mute button didn't carry to the next
+  card. Unmuting on the settled card's `onplaying` — backed by the recent scroll
+  gesture's iOS sticky-activation window — carries sound card→card correctly.
+  (Auto-advance is programmatic, not a gesture, so an auto-advanced card can stay
+  muted until the next interaction — an inherent iOS constraint.) The mute `$effect`
+  only ever (re)mutes; it NEVER reactively unmutes. **Never set `v.muted = false`
+  before/around a `play()` (only after it's confirmed playing), and never feed the
+  mute pref into a `play()` path.** This is the prevention that superseded chasing
+  the break via gesture-unlock recovery (the 0.5.3 gesture-unlock stays as a
+  belt-and-suspenders for any residual transient reject).
 - **Self-heal on playable (0.5.1) — the rAF retry isn't the last word.** The
   `<video>`'s `canplay`/`loadeddata` re-attempt play via the pure
   `shouldRetryOnPlayable` (`src/lib/playback.ts`, guarded by

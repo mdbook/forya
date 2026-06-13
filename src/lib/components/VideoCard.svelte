@@ -188,10 +188,10 @@
 		// to a MUTED element — an unmuted play() yields `NotAllowedError`, which then
 		// revokes autoplay document-wide (the every-~8 break, root-caused on-device:
 		// muted feed = infinite clean). The persisted sound preference must NEVER reach
-		// a fresh autoplay; sound-on is honoured by unmuting only the ACTIVE card inside
-		// a user gesture (Feed.toggleMute / the touchend handler), which is a property
-		// set on an already-playing element — never a play(), so it can't re-trip the
-		// autoplay gate.
+		// a fresh autoplay; sound-on is honoured by unmuting the ACTIVE card only once
+		// it's CONFIRMED playing (the `onplaying` handler below) or via Feed.toggleMute
+		// — a property set on an already-playing element, never a play(), so it can't
+		// re-trip the autoplay gate.
 		v.muted = true;
 		const p = v.play();
 		if (!p || typeof p.then !== 'function') return;
@@ -263,10 +263,10 @@
 
 	// Mute sync (0.5.5): only ever (re)MUTES reactively — when the pref is muted, or
 	// when this card isn't the active one (neighbours stay muted). It NEVER reactively
-	// UNMUTES: unmuting is gesture-driven (Feed.toggleMute / touchend), so a fresh
-	// autoplay is always muted and we don't unmute outside a user gesture. Without
-	// this guard, a sound-on pref would unmute every card here (non-gesture) and a
-	// fresh autoplay could land unmuted again.
+	// UNMUTES: unmuting happens only AFTER play succeeds (the `onplaying` handler, when
+	// sound-on) or via Feed.toggleMute — never in a reactive effect that could race the
+	// play() and land an unmuted autoplay. Without this guard, a sound-on pref would
+	// unmute every card here (pre-play) and a fresh autoplay could land unmuted again.
 	$effect(() => {
 		const v = el;
 		if (v && (muted || !active)) v.muted = true;
@@ -368,7 +368,18 @@
 			hasPlayed = true;
 			buffering = false;
 			blocked = false;
-			if (active) onready?.();
+			if (active) {
+				onready?.();
+				// Sound-on carry (0.5.5): the card ALWAYS autoplays muted (tryPlay — the
+				// cure that keeps play() gesture-free). Once it's CONFIRMED playing, honour
+				// a sound-on preference by unmuting HERE — a property set on an already-
+				// playing element, never a play(), so it can't trip iOS's NotAllowedError
+				// or the doc-wide autoplay revocation. Runs on the SETTLED active card the
+				// instant it starts, backed by the user's recent scroll gesture (iOS sticky
+				// activation), so sound carries card→card. Supersedes the touchend unmute,
+				// which targeted the mid-snap card (the wrong one) too early.
+				if (!muted && el) el.muted = false;
+			}
 			dbg('play');
 		}}
 	></video>

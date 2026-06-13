@@ -274,19 +274,15 @@
 			.catch(() => {});
 	}
 
-	// touchend (0.5.5): the one place we honour a sound-on preference. Autoplay is
-	// ALWAYS muted (VideoCard.tryPlay) so it never trips iOS's NotAllowedError; here,
-	// inside the scroll/tap gesture, we unmute the ACTIVE card if the user wants sound
-	// — a property set on an already-playing element, never a play(), so it can't
-	// re-trip the autoplay gate. Gesture-unlock runs FIRST (it plays a blocked card
-	// muted), THEN we unmute — never the reverse (unmute-then-play would be an unmuted
-	// play() = NotAllowedError). So sound carries card→card as the user scrolls.
+	// touchend (0.5.4): the scroll-recovery gesture-unlock — re-grant iOS's doc-wide
+	// autoplay on a drag that lands on a blocked card (see gestureUnlock). It does NOT
+	// unmute: sound-on carry moved to VideoCard's `onplaying` (0.5.5) because touchend
+	// fires at finger-lift — BEFORE the scroll-snap settles — so it targeted the card
+	// scrolling AWAY (mid-snap), not the one that settles active (the brief-blip-then-
+	// silence bug). Unmuting the SETTLED card when it actually starts playing, backed by
+	// this same scroll gesture's sticky activation, carries sound forward correctly.
 	function onTouchEnd() {
 		gestureUnlock();
-		if (!muted) {
-			const v = activeVideo();
-			if (v) v.muted = false;
-		}
 	}
 
 	function scrollTo(index: number) {
