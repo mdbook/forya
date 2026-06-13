@@ -184,7 +184,15 @@
 		// load-interrupted play) is benign and never marks the card blocked.
 		const gen = ++playGen;
 		dbg('try');
-		v.muted = muted;
+		// ALWAYS autoplay muted (0.5.5): iOS Safari only grants gesture-free autoplay
+		// to a MUTED element — an unmuted play() yields `NotAllowedError`, which then
+		// revokes autoplay document-wide (the every-~8 break, root-caused on-device:
+		// muted feed = infinite clean). The persisted sound preference must NEVER reach
+		// a fresh autoplay; sound-on is honoured by unmuting only the ACTIVE card inside
+		// a user gesture (Feed.toggleMute / the touchend handler), which is a property
+		// set on an already-playing element — never a play(), so it can't re-trip the
+		// autoplay gate.
+		v.muted = true;
 		const p = v.play();
 		if (!p || typeof p.then !== 'function') return;
 		p.then(() => {
@@ -253,10 +261,15 @@
 		}
 	});
 
-	// Keep the live mute state in sync without re-triggering play/pause.
+	// Mute sync (0.5.5): only ever (re)MUTES reactively — when the pref is muted, or
+	// when this card isn't the active one (neighbours stay muted). It NEVER reactively
+	// UNMUTES: unmuting is gesture-driven (Feed.toggleMute / touchend), so a fresh
+	// autoplay is always muted and we don't unmute outside a user gesture. Without
+	// this guard, a sound-on pref would unmute every card here (non-gesture) and a
+	// fresh autoplay could land unmuted again.
 	$effect(() => {
 		const v = el;
-		if (v) v.muted = muted;
+		if (v && (muted || !active)) v.muted = true;
 	});
 
 	// Report autoplay-`blocked` to Feed (0.5.3) — but ONLY while this card is the

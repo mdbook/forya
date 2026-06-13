@@ -4,6 +4,27 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.5.5 — always-muted autoplay (fixes the residual iOS autoplay break)
+
+Root-caused the residual every-~8-videos autoplay break: it was **unmuted
+autoplay**. iOS Safari only grants gesture-free autoplay to a **muted** element;
+once the user turned sound on, the persisted preference was applied to every
+card's autoplay (`v.muted = muted`), so each fresh card did an _unmuted_ `play()`
+→ `NotAllowedError` → autoplay revoked document-wide until a gesture. (Confirmed
+on-device: a muted feed scrolls infinitely with zero breaks; the instrumentation
+overlay pinned the reject as `NotAllowedError`, not decode/resource/readiness.)
+
+### Fixed
+
+- **Autoplay is now ALWAYS muted** (`VideoCard.tryPlay` sets `v.muted = true`
+  unconditionally), so it's gesture-free and never trips `NotAllowedError`. The
+  persisted sound preference no longer reaches a fresh autoplay — restoring the
+  criterion-3 gesture-free-muted-autoplay contract.
+- **Sound-on is honored by unmuting only the ACTIVE card, inside a gesture**
+  (`toggleMute`, and the `touchend` handler so sound carries across scrolls) — a
+  property set on an already-playing element, never a `play()`, so it can't
+  re-trip the gate. The mute `$effect` no longer reactively unmutes.
+
 ## 0.5.4 — gesture-unlock two-tap fix + playback instrumentation
 
 Fixes the two-tap regression 0.5.3 introduced, and adds a dark-by-default

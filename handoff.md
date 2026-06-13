@@ -181,6 +181,22 @@ is operator-on-device, criterion 3):
   transiently reject before it's ready). Only if the retry also fails does the
   manual play button show. (0.4 removed the old `playback.unlocked` flag — it had
   no readers once the retry became unconditional.)
+- **Autoplay is ALWAYS muted (0.5.5) — the persisted sound pref must NEVER reach a
+  fresh autoplay.** `tryPlay` sets `v.muted = true` unconditionally. This was the
+  root cause of the long-hunted "every-~8-videos" autoplay break: iOS Safari grants
+  gesture-free autoplay ONLY to a muted element, so once the user turned sound on,
+  the old `v.muted = muted` made each fresh card do an _unmuted_ `play()` →
+  `NotAllowedError` → autoplay revoked document-wide until a gesture (confirmed
+  on-device: a muted feed scrolls infinitely clean; the `DEBUG_PLAYBACK` overlay
+  pinned the reject as `NotAllowedError`). Sound-on is honoured by unmuting **only
+  the active card, inside a user gesture** (`Feed.toggleMute`, and the `touchend`
+  handler so sound carries across scrolls) — that's a property set on an
+  already-playing element, never a `play()`, so it can't re-trip the gate. The mute
+  `$effect` only ever (re)mutes; it never reactively unmutes. **Never set
+  `v.muted = false` outside a gesture, and never feed the mute pref into a `play()`
+  path.** This is the prevention that superseded chasing it via gesture-unlock
+  recovery (the 0.5.3 gesture-unlock stays as a belt-and-suspenders for any residual
+  transient reject).
 - **Self-heal on playable (0.5.1) — the rAF retry isn't the last word.** The
   `<video>`'s `canplay`/`loadeddata` re-attempt play via the pure
   `shouldRetryOnPlayable` (`src/lib/playback.ts`, guarded by

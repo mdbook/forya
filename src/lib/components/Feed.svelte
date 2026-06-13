@@ -274,6 +274,21 @@
 			.catch(() => {});
 	}
 
+	// touchend (0.5.5): the one place we honour a sound-on preference. Autoplay is
+	// ALWAYS muted (VideoCard.tryPlay) so it never trips iOS's NotAllowedError; here,
+	// inside the scroll/tap gesture, we unmute the ACTIVE card if the user wants sound
+	// — a property set on an already-playing element, never a play(), so it can't
+	// re-trip the autoplay gate. Gesture-unlock runs FIRST (it plays a blocked card
+	// muted), THEN we unmute — never the reverse (unmute-then-play would be an unmuted
+	// play() = NotAllowedError). So sound carries card→card as the user scrolls.
+	function onTouchEnd() {
+		gestureUnlock();
+		if (!muted) {
+			const v = activeVideo();
+			if (v) v.muted = false;
+		}
+	}
+
 	function scrollTo(index: number) {
 		const i = Math.max(0, Math.min(visible.length - 1, index));
 		cardEls[i]?.scrollIntoView({ behavior: 'smooth' });
@@ -359,7 +374,7 @@
 		// the two-tap regression.
 		feedEl?.addEventListener('touchstart', onTouchStart, { passive: true });
 		feedEl?.addEventListener('touchmove', onTouchMove, { passive: true });
-		feedEl?.addEventListener('touchend', gestureUnlock, { passive: true });
+		feedEl?.addEventListener('touchend', onTouchEnd, { passive: true });
 
 		// 0.5.4: sample the live <video> population for the debug overlay (off in prod).
 		if (settings.debugPlayback) {
@@ -371,7 +386,7 @@
 			io?.disconnect();
 			feedEl?.removeEventListener('touchstart', onTouchStart);
 			feedEl?.removeEventListener('touchmove', onTouchMove);
-			feedEl?.removeEventListener('touchend', gestureUnlock);
+			feedEl?.removeEventListener('touchend', onTouchEnd);
 			clearTimeout(undoTimer);
 			clearTimeout(modeTimer);
 			clearTimeout(copyTimer);
