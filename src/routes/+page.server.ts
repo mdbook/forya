@@ -34,7 +34,8 @@ export const load: PageServerLoad = async () => {
 			preloadAhead: config.preloadAhead,
 			preloadBehind: config.preloadBehind,
 			autoAdvance: config.autoAdvance,
-			posters: config.dataDir !== ''
+			posters: config.dataDir !== '',
+			debugPlayback: config.debugPlayback
 		}
 	};
 };

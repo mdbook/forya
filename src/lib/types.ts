@@ -47,4 +47,7 @@ export interface FeedSettings {
 	 *  client never requests `/api/poster`, so a disabled instance makes no extra
 	 *  requests. */
 	posters: boolean;
+	/** Diagnostic playback overlay (DEBUG_PLAYBACK, 0.5.4). Default false → the
+	 *  overlay never renders and VideoCard emits no debug events. */
+	debugPlayback: boolean;
 }
