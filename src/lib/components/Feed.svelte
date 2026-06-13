@@ -1,10 +1,16 @@
 <script lang="ts">
-	// The vertical feed (SPEC §4). One IntersectionObserver (~0.6 threshold)
-	// drives a single active index: the entering card plays, every other card
-	// pauses — only one video plays at a time. Layout is 100dvh/100svh scroll-snap
-	// (dynamic units only, never the static one) via app.css. Desktop fallback:
-	// Up/Down + j/k move snap points, Space play/pause, m mute.
-	import { onMount } from 'svelte';
+	// The vertical feed (SPEC §4). One IntersectionObserver (~0.6 threshold) drives a
+	// single active index. Layout is 100dvh/100svh scroll-snap (dynamic units only) via
+	// app.css. Desktop fallback: Up/Down + j/k move snap points, Space play/pause, m mute.
+	//
+	// 0.6 — POOLED <video> elements. Instead of one `<video>` per card (minted fresh and
+	// released on unmount), Feed owns a small fixed POOL of persistent `<video>` elements
+	// (see src/lib/pool.ts) and reparents them onto the active card + its neighbours,
+	// recycling via `src`-swap as the active index moves. This is what lets a gesture-
+	// blessed element carry sound across cards (M2); M1 is the structural move, muted-only,
+	// to prove the always-muted cure + the serving-four Range path survive the rearchitect.
+	// Decoder count is now bounded by POOL_SIZE (< the old ~6 windowed mounts).
+	import { onMount, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import VideoCard from './VideoCard.svelte';
 	import ActionRail from './ActionRail.svelte';
@@ -20,8 +26,9 @@
 		saveAutoAdvance
 	} from '$lib/stores/prefs';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
-	import { feedWindow } from '$lib/window';
-	import { shouldGestureUnlock } from '$lib/playback';
+	import { pickFit } from '$lib/fit';
+	import { isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
+	import { coverage, reassignPool } from '$lib/pool';
 
 	let {
 		items,
@@ -36,16 +43,13 @@
 		settings: FeedSettings;
 		/** Total items in the shuffled feed, for the lazy-load stop condition. */
 		total: number;
-		/** Per-request shuffle seed — threaded to /api/feed so each lazily-fetched
-		 *  page continues the SAME order (deterministic seededShuffle). */
+		/** Per-request shuffle seed — threaded to /api/feed so each lazily-fetched page
+		 *  continues the SAME order (deterministic seededShuffle). */
 		seed: number;
 	} = $props();
 
-	// 0.3.1 lazy-load: `items` is only the first page (slim SSR — we no longer
-	// inline the whole multi-MB manifest). `extra` accumulates lazily-fetched
-	// pages; `allItems` is the full known list. Using a separate $state array
-	// (rather than seeding $state from the `items` prop) keeps the first page
-	// server-rendered with no SSR→client reorder and no props-in-state warning.
+	// 0.3.1 lazy-load: `items` is only the first page (slim SSR). `extra` accumulates
+	// lazily-fetched pages; `allItems` is the full known list.
 	let extra = $state<FeedItem[]>([]);
 	const allItems = $derived([...items, ...extra]);
 	let fetching = $state(false);
@@ -72,26 +76,10 @@
 	}
 
 	let activeIndex = $state(0);
-	let dir = $state(1); // travel direction: +1 scrolling down, -1 scrolling up
-	// Readiness gate (0.4): false until the active card actually reaches `playing`.
-	// While false, `feedWindow` lets ONLY the active card fetch (neighbours stay
-	// mounted but `preload:none`) — so a cold/slow start pulls one stream and a
-	// failing active never has an eager neighbour decoding alongside it. Reset to
-	// false on every active-index change (so a scroll re-prioritises the new
-	// about-to-play card), set true by the active card's `onready`.
-	let activeReady = $state(false);
-	// Is the CURRENT active card autoplay-`blocked` (a muted-play() rejection)? Fed
-	// by VideoCard's `onblocked` (which only the active card emits) and RESET to
-	// false on every active-index change (below) so a stale `blocked` from a
-	// scrolled-past card can't linger. Drives the gesture-unlock (0.5.3): when true,
-	// the next user touch re-grants iOS's document-wide autoplay permission.
-	let activeBlocked = $state(false);
 	let muted = $state(true);
 	let feedEl = $state<HTMLElement>();
 	let cardEls = $state<HTMLElement[]>([]);
 	let io: IntersectionObserver | undefined;
-	// Viewport aspect (w/h), kept current so cards re-fit on rotate/resize. The
-	// card fills the feed cell (full width × 100dvh), so window AR ≈ card AR.
 	let viewportAR = $state(1);
 
 	function readViewport() {
@@ -100,37 +88,200 @@
 		}
 	}
 
-	// Hidden ("trashed") set — client-side only, reactive (SvelteSet) so the
-	// `visible` derived recomputes on mutate. `visible` is what the feed actually
-	// renders; activeIndex indexes into it. `lastHidden` drives the transient Undo
-	// toast (hide is reversible, so we undo rather than confirm).
+	// Hidden ("trashed") set — client-side only, reactive so `visible` recomputes.
 	const hidden = new SvelteSet<string>();
 	let lastHidden = $state<string | null>(null);
 	let undoTimer: ReturnType<typeof setTimeout> | undefined;
-	// Transient confirmation of the loop/next mode after a toggle (reuses the
-	// undo-toast styling). Null when no toast is showing.
 	let modeToast = $state<string | null>(null);
 	let modeTimer: ReturnType<typeof setTimeout> | undefined;
-	// Transient "Copied ✓" after tapping the info-panel ID (so the operator can
-	// grab a clip ID to report which ones misbehave). Null when not showing.
 	let copyToast = $state(false);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
 	let infoOpen = $state(false);
-	// Initial value is set from settings (or the stored pref) in onMount; the
-	// literal here is just the pre-hydration placeholder (no video has ended yet).
 	let autoAdvance = $state(false);
 	const visible = $derived(applyHidden(allItems, hidden));
 	const activeItem = $derived(visible[activeIndex]);
 
+	// ── Pooled <video> machine (0.6) ──────────────────────────────────────────────
+	// POOL_SIZE persistent elements, reparented onto the covered cards. Bump to 5 (±2) if
+	// on-device multi-card flick/jumps show a rough stall; 3 (prev/cur/next) is the start
+	// (a decoder WIN vs the old ~6 windowed mounts). `pool` is plain (non-reactive — we
+	// never want Svelte reconciling these foreign nodes); their assignment + per-card
+	// reveal state are the reactive surface the shells read.
+	const POOL_SIZE = 3;
+	let pool: HTMLVideoElement[] = [];
+	let slotToCard: (number | null)[] = new Array(POOL_SIZE).fill(null); // pool slot → card idx
+	// Shell slot divs keyed by the STABLE item name (not index): `use:` actions fire only
+	// on mount/destroy, so a hide/undo or lazy-append that shifts indices must not strand a
+	// kept card's slot under a stale index. The card node persists across reorders (keyed
+	// each-block), so name→node is stable.
+	let cardSlotByName = $state<Record<string, HTMLElement>>({});
+	// Reactive surface for the shells: which card indices have a painted (revealed) video,
+	// and the active card's live playback state (single source of truth — review #433).
+	let cardRevealed = $state<Record<number, boolean>>({});
+	let activeBuffering = $state(false);
+	let activeBlocked = $state(false);
+	let activePaused = $state(false);
+	let activeCurrentTime = $state(0);
+	let activeDuration = $state(0);
+	// Monotonic token cancelling stale async play retries on the active element.
+	let playGen = 0;
+
+	function slotForCard(card: number): number {
+		return slotToCard.indexOf(card);
+	}
+	function activeVideo(): HTMLVideoElement | null {
+		const s = slotForCard(activeIndex);
+		return s >= 0 ? pool[s] : null;
+	}
+
+	function applyFit(v: HTMLVideoElement, item: FeedItem) {
+		const f = pickFit(item.width || 0, item.height || 0, viewportAR);
+		v.classList.toggle('contain', f === 'contain');
+	}
+
+	// The always-muted cure (0.5.5), ported to act on the active pooled element. Muted
+	// autoplay is gesture-free; a transient reject on a freshly-(re)src'd element retries
+	// once on the next frame, then surfaces tap-to-play (`blocked`) without releasing —
+	// canplay/loadeddata self-heal (`retryIfPlayable`) catches the not-yet-buffered case.
+	// All callbacks gen-guarded so a scrolled-past attempt no-ops. NEVER unmutes here
+	// (sound-on carry is M2: bless the pool in a gesture, then unmute the active element).
+	function tryPlayActive(v: HTMLVideoElement) {
+		if (!v.isConnected) return; // not parked into a slot yet
+		const gen = ++playGen;
+		v.muted = true;
+		const p = v.play();
+		if (!p || typeof p.then !== 'function') return;
+		p.then(() => {
+			if (gen === playGen) activeBlocked = false;
+		}).catch((err: unknown) => {
+			if (gen !== playGen) return;
+			if (err instanceof DOMException && err.name === 'AbortError') return;
+			requestAnimationFrame(() => {
+				const cur = activeVideo();
+				if (gen !== playGen || !cur) return;
+				cur
+					.play()
+					.then(() => {
+						if (gen === playGen) activeBlocked = false;
+					})
+					.catch((err2: unknown) => {
+						if (gen !== playGen) return;
+						if (err2 instanceof DOMException && err2.name === 'AbortError') return;
+						pushDebug(activeIndex, 'reject', err2 instanceof DOMException ? err2.name : 'err');
+						activeBlocked = true;
+						if (cur && isMediaReady(cur.readyState)) {
+							setTimeout(() => {
+								const c2 = activeVideo();
+								if (gen !== playGen || !c2) return;
+								c2.play()
+									.then(() => {
+										if (gen === playGen) activeBlocked = false;
+									})
+									.catch(() => {
+										/* leave blocked → tap-to-play; one delayed retry only */
+									});
+							}, 250);
+						}
+					});
+			});
+		});
+	}
+
+	// Per-element listeners (bound once at creation; `slot` is the fixed pool index). They
+	// only touch the reactive active-state when THIS slot is the active one, so a
+	// neighbour's events can't clobber the active card's UI.
+	function onPoolPlaying(slot: number) {
+		const card = slotToCard[slot];
+		if (card !== null) cardRevealed = { ...cardRevealed, [card]: true };
+		pool[slot]?.classList.add('revealed');
+		if (slot === slotForCard(activeIndex)) {
+			activeBuffering = false;
+			activeBlocked = false;
+		}
+	}
+	function onPoolError(slot: number) {
+		if (slot === slotForCard(activeIndex)) {
+			activeBuffering = false;
+			activeBlocked = true;
+			pushDebug(activeIndex, 'error', pool[slot]?.error ? `code${pool[slot]!.error!.code}` : 'err');
+		}
+	}
+
+	// Assign pool slots to the coverage window, recycle (src-swap) freed slots, reparent
+	// each onto its card's shell slot, then drive play/pause. Pure decision in pool.ts;
+	// this applies it to the DOM. Called from the $effect on active-index / feed-length /
+	// slot-registration changes.
+	function syncPool() {
+		if (!pool.length) return;
+		const totalCards = visible.length;
+		if (totalCards === 0) return;
+		const targets = coverage(activeIndex, POOL_SIZE, totalCards);
+		const next = reassignPool(slotToCard, targets, POOL_SIZE);
+		for (let s = 0; s < POOL_SIZE; s++) {
+			const v = pool[s];
+			const card = next[s];
+			const prevCard = slotToCard[s];
+			if (card === null) {
+				if (prevCard !== null) {
+					v.pause();
+					v.removeAttribute('src');
+					v.load();
+				}
+				continue;
+			}
+			const item = visible[card];
+			if (!item) continue;
+			if (card !== prevCard) {
+				// Recycle this element onto a new card: reset reveal, swap src. The element
+				// stays blessed (per-element, durable) across this swap — that's the point.
+				if (prevCard !== null && cardRevealed[prevCard]) {
+					const rest = { ...cardRevealed };
+					delete rest[prevCard];
+					cardRevealed = rest;
+				}
+				v.classList.remove('revealed');
+				v.loop = !autoAdvance;
+				v.muted = true; // cure: re-assert muted on every swap (M1: always muted)
+				applyFit(v, item);
+				v.src = item.url;
+			}
+			// (Re)park into the card's shell slot (resolved by stable name).
+			const slotDiv = cardSlotByName[item.name] ?? null;
+			if (slotDiv && v.parentNode !== slotDiv) slotDiv.appendChild(v);
+		}
+		slotToCard = next;
+		driveActive();
+	}
+
+	function driveActive() {
+		const aSlot = slotForCard(activeIndex);
+		for (let s = 0; s < pool.length; s++) {
+			if (s !== aSlot) pool[s].pause();
+		}
+		if (aSlot < 0) return;
+		const v = pool[aSlot];
+		activeDuration = v.duration || 0;
+		activeCurrentTime = v.currentTime || 0;
+		activeBuffering = false;
+		tryPlayActive(v);
+	}
+
+	function registerSlot(name: string, el: HTMLElement | null) {
+		const next = { ...cardSlotByName };
+		if (el) next[name] = el;
+		else delete next[name];
+		cardSlotByName = next;
+	}
+
 	function toggleAutoAdvance() {
 		autoAdvance = !autoAdvance;
+		for (const v of pool) v.loop = !autoAdvance;
 		modeToast = autoAdvance ? 'Autoplay next: on' : 'Loop: on';
 		clearTimeout(modeTimer);
 		modeTimer = setTimeout(() => (modeToast = null), 2000);
 	}
 
-	/** Share the active video via the iOS share sheet, or fall back to a direct
-	 *  download when the Web Share API is unavailable (desktop). */
+	/** Share the active video via the iOS share sheet, or fall back to a direct download. */
 	function share(item: FeedItem | undefined) {
 		if (!item) return;
 		const url = new URL(item.url, location.origin).href;
@@ -148,11 +299,6 @@
 		infoOpen = !infoOpen;
 	}
 
-	/** Copy the active clip's ID (the `/api/media` filename) to the clipboard so a
-	 *  breaking clip is easy to report. `navigator.clipboard` works on iOS Safari
-	 *  over HTTPS; if it's unavailable/blocked we stay silent and rely on the ID
-	 *  being `user-select:text` (long-press → Copy) rather than claim a false
-	 *  success. */
 	async function copyId(name: string | undefined) {
 		if (!name || !navigator.clipboard) return;
 		try {
@@ -181,7 +327,6 @@
 		if (!name) return;
 		hidden.add(name);
 		saveHidden(feedName, hidden);
-		// If we hid the last card, clamp the active index back into range.
 		const count = applyHidden(allItems, hidden).length;
 		if (activeIndex >= count) activeIndex = Math.max(0, count - 1);
 		lastHidden = name;
@@ -197,96 +342,33 @@
 		clearTimeout(undoTimer);
 	}
 
-	// The lazy-load/mount window for `index`, via the pure `feedWindow` (guarded
-	// by tests/window.test.ts). `live` cards mount the heavy VideoCard (a real
-	// `<video src>`); off-window cards render a cheap placeholder — capping live
-	// decoders to the window regardless of feed size. Direction-biased and
-	// active-always-live; see window.ts.
-	function windowState(index: number) {
-		return feedWindow(index, activeIndex, dir, settings, activeReady);
+	// Which cards mount the (cheap) shell — a generous radius so posters preload and every
+	// covered (pool) card is always mounted (coverage ⊆ this). Off-window cards render a
+	// bare placeholder, keeping poster requests bounded regardless of feed size.
+	const MOUNT_RADIUS = 4;
+	function isLive(index: number): boolean {
+		return Math.abs(index - activeIndex) <= MOUNT_RADIUS;
 	}
 
-	function activeVideo(): HTMLVideoElement | null {
-		return cardEls[activeIndex]?.querySelector('video') ?? null;
-	}
-
-	// Gesture-unlock (0.5.3) — the document-wide iOS autoplay-revocation recovery.
-	// On iOS a single muted-play() rejection revokes autoplay for the WHOLE document
-	// until a real user gesture; thereafter every programmatic play() rejects,
-	// including the 0.5.1 self-heal. So when the active card is `blocked`, re-attempt
-	// play() SYNCHRONOUSLY inside the next user gesture — being in the gesture's call
-	// stack is exactly what re-grants iOS permission (a later microtask/$effect would
-	// not). That one in-gesture play() re-activates the doc; the card's own
-	// onplay/onplaying then clear `blocked`, and every later card autoplays again via
-	// its normal IO path ("one tap unlocks all").
-	//
-	// 0.5.4: fire ONLY on a touch that actually MOVED (a scroll-drag) — `touchMoved`.
-	// A stationary tap is already handled by VideoCard's `togglePlay` (which plays
-	// in-gesture itself); firing here on a tap too double-drove the play(), and the
-	// tap's synthesized `click` → `togglePlay` then PAUSED it — the 0.5.3 two-tap
-	// regression. So this is now the pure SCROLL-recovery path; taps go through
-	// togglePlay alone (one tap). Never fights a user pause (`paused` is separate
-	// from `blocked`); a no-op on a healthy card.
+	// ── Gesture-unlock (0.5.3) — document-wide iOS autoplay recovery, now on the pooled
+	// active element. On a real scroll-drag landing on a `blocked` active card, re-attempt
+	// play() SYNCHRONOUSLY in the gesture so iOS re-grants. Fires only on a moved touch
+	// (not a stationary tap — togglePlay owns those). M2 adds the sound-on bless here.
 	let touchStartY = 0;
 	let touchMoved = false;
-
-	// 0.5.4 diagnostic overlay — inert unless `settings.debugPlayback` (DEBUG_PLAYBACK).
-	// `debugLog` is a small ring buffer of per-card playback events (try / reject+
-	// err.name / error+code / play) emitted by VideoCard; `debugCounts` samples the
-	// live `<video>`/readyState population from the DOM. Together they pin the
-	// every-~8 break: whether the rejection is `NotAllowedError` (permission) or a
-	// decode/resource error, and whether decoders climb past the window.
-	let debugLog = $state<string[]>([]);
-	let debugCounts = $state('');
-	let debugTimer: ReturnType<typeof setInterval> | undefined;
-	let debugSeq = 0;
-
-	function pushDebug(idx: number, kind: string, detail?: string) {
-		debugSeq++;
-		const line = `${debugSeq} ${idx}:${kind}${detail ? `(${detail})` : ''}`;
-		debugLog = [...debugLog.slice(-13), line];
-	}
-
-	function sampleDebug() {
-		if (typeof document === 'undefined') return;
-		const vids = document.getElementsByTagName('video');
-		let data = 0;
-		for (const v of vids) if (v.readyState >= 2) data++;
-		const sha = settings.buildSha ? settings.buildSha.slice(0, 8) : 'local';
-		debugCounts = `build=${sha} live=${vids.length} data=${data} active=${activeIndex} blk=${activeBlocked ? 1 : 0}`;
-	}
 
 	function onTouchStart(e: TouchEvent) {
 		touchStartY = e.touches[0]?.clientY ?? 0;
 		touchMoved = false;
 	}
-
 	function onTouchMove(e: TouchEvent) {
-		if (Math.abs((e.touches[0]?.clientY ?? touchStartY) - touchStartY) > 10) {
-			touchMoved = true;
-		}
+		if (Math.abs((e.touches[0]?.clientY ?? touchStartY) - touchStartY) > 10) touchMoved = true;
 	}
-
-	function gestureUnlock() {
-		if (!shouldGestureUnlock({ activeBlocked, moved: touchMoved })) return;
+	function onTouchEnd() {
+		if (!touchMoved || !activeBlocked) return;
 		activeVideo()
 			?.play()
 			.catch(() => {});
-	}
-
-	// touchend (0.5.5): the one place we honour a sound-on preference. Autoplay is
-	// ALWAYS muted (VideoCard.tryPlay) so it never trips iOS's NotAllowedError; here,
-	// inside the scroll/tap gesture, we unmute the ACTIVE card if the user wants sound
-	// — a property set on an already-playing element, never a play(), so it can't
-	// re-trip the autoplay gate. Gesture-unlock runs FIRST (it plays a blocked card
-	// muted), THEN we unmute — never the reverse (unmute-then-play would be an unmuted
-	// play() = NotAllowedError). So sound carries card→card as the user scrolls.
-	function onTouchEnd() {
-		gestureUnlock();
-		if (!muted) {
-			const v = activeVideo();
-			if (v) v.muted = false;
-		}
 	}
 
 	function scrollTo(index: number) {
@@ -294,21 +376,35 @@
 		cardEls[i]?.scrollIntoView({ behavior: 'smooth' });
 	}
 
-	function toggleMute() {
-		muted = !muted;
-		// First-tap audio unlock: flip the live video inside the user gesture.
+	function tapActive() {
 		const v = activeVideo();
-		if (v) {
-			v.muted = muted;
-			if (!muted) v.play().catch(() => {});
+		if (!v) return;
+		if (v.paused) {
+			activePaused = false;
+			activeBlocked = false;
+			tryPlayActive(v);
+		} else {
+			v.pause();
+			activePaused = true;
 		}
 	}
 
-	function togglePlayActive() {
+	function toggleMute() {
+		// M1 is muted-only (structural rearchitecture). The pref still toggles + persists so
+		// the rail icon reflects intent; the bless (unmute the blessed pool, in this gesture)
+		// lands in M2 atop this same handler.
+		muted = !muted;
+	}
+
+	function seekActiveFrac(frac: number) {
 		const v = activeVideo();
-		if (!v) return;
-		if (v.paused) v.play().catch(() => {});
-		else v.pause();
+		if (v && activeDuration) v.currentTime = frac * activeDuration;
+	}
+	function seekActiveBy(delta: number) {
+		const v = activeVideo();
+		if (v && activeDuration) {
+			v.currentTime = Math.min(activeDuration, Math.max(0, (v.currentTime || 0) + delta));
+		}
 	}
 
 	function onKeydown(e: KeyboardEvent) {
@@ -325,12 +421,33 @@
 				break;
 			case ' ':
 				e.preventDefault();
-				togglePlayActive();
+				tapActive();
 				break;
 			case 'm':
 				toggleMute();
 				break;
 		}
+	}
+
+	// ── DEBUG overlay (0.5.4) — inert unless DEBUG_PLAYBACK. Now also the pool watch: the
+	// live `<video>` count MUST stay == POOL_SIZE across src-swaps (no decoder leak/ghost).
+	let debugLog = $state<string[]>([]);
+	let debugCounts = $state('');
+	let debugTimer: ReturnType<typeof setInterval> | undefined;
+	let debugSeq = 0;
+
+	function pushDebug(idx: number, kind: string, detail?: string) {
+		if (!settings.debugPlayback) return;
+		debugSeq++;
+		debugLog = [...debugLog.slice(-13), `${debugSeq} ${idx}:${kind}${detail ? `(${detail})` : ''}`];
+	}
+	function sampleDebug() {
+		if (typeof document === 'undefined') return;
+		const vids = document.getElementsByTagName('video');
+		let data = 0;
+		for (const v of vids) if (v.readyState >= 2) data++;
+		const sha = settings.buildSha ? settings.buildSha.slice(0, 8) : 'local';
+		debugCounts = `build=${sha} pool=${pool.length} live=${vids.length} data=${data} active=${activeIndex} blk=${activeBlocked ? 1 : 0}`;
 	}
 
 	onMount(() => {
@@ -340,43 +457,69 @@
 		autoAdvance = loadAutoAdvance(feedName, settings.autoAdvance);
 		for (const n of loadHidden(feedName)) hidden.add(n);
 
-		// No resume-to-index: the feed order is randomized server-side per load
-		// (0.3.0), so a saved index would point at a different clip each visit —
-		// resume was removed rather than silently mislead. Always start at the top.
+		// Create the persistent pool (imperative — these foreign nodes outlive any card and
+		// are reparented across cards; Svelte must not reconcile them). Listeners bound once.
+		for (let s = 0; s < POOL_SIZE; s++) {
+			const v = document.createElement('video');
+			v.muted = true;
+			v.playsInline = true;
+			v.setAttribute('playsinline', '');
+			v.loop = !autoAdvance;
+			v.preload = 'auto';
+			v.className = 'pool-video';
+			v.addEventListener('playing', () => onPoolPlaying(s));
+			v.addEventListener('waiting', () => {
+				if (s === slotForCard(activeIndex)) activeBuffering = true;
+			});
+			v.addEventListener('timeupdate', () => {
+				if (s === slotForCard(activeIndex)) activeCurrentTime = v.currentTime;
+			});
+			v.addEventListener('loadedmetadata', () => {
+				if (s === slotForCard(activeIndex)) activeDuration = v.duration || 0;
+			});
+			v.addEventListener('canplay', () => {
+				if (
+					s === slotForCard(activeIndex) &&
+					shouldRetryOnPlayable({
+						active: true,
+						paused: activePaused,
+						hasPlayed: cardRevealed[activeIndex] ?? false,
+						errored: false
+					})
+				)
+					tryPlayActive(v);
+			});
+			v.addEventListener('ended', () => {
+				if (s === slotForCard(activeIndex) && autoAdvance) scrollTo(activeIndex + 1);
+			});
+			v.addEventListener('error', () => onPoolError(s));
+			pool.push(v);
+		}
 
-		// THE single IntersectionObserver — the only one in the app.
 		io = new IntersectionObserver(
 			(entries) => {
 				for (const entry of entries) {
 					if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
 						const idx = Number((entry.target as HTMLElement).dataset.index);
 						if (!Number.isNaN(idx) && idx !== activeIndex) {
-							dir = idx > activeIndex ? 1 : -1;
+							// new card: reset the active-card UI state until it reports
+							activeBlocked = false;
+							activePaused = false;
+							activeCurrentTime = 0;
+							activeDuration = 0;
 							activeIndex = idx;
-							activeReady = false; // re-gate: prioritise the new about-to-play card
-							activeBlocked = false; // new card: clear stale blocked until it reports
 						}
 					}
 				}
 			},
 			{ root: feedEl, threshold: [0.6] }
 		);
-
 		for (const el of cardEls) if (el) io.observe(el);
 
-		// Gesture-unlock listeners (0.5.3, refined 0.5.4): re-grant iOS autoplay on a
-		// scroll-drag that lands on a blocked card. `touchstart`/`touchmove` track
-		// whether the touch actually moved; `touchend` (NOT pointerup — a scroll-fling
-		// fires pointercancel and stops sending pointer events) fires the unlock only
-		// when it did (`gestureUnlock` guards on `touchMoved`). All PASSIVE — no
-		// preventDefault, zero scroll interference. The `click` arm was DROPPED in
-		// 0.5.4: taps are owned by VideoCard's `togglePlay`, and the extra arm caused
-		// the two-tap regression.
 		feedEl?.addEventListener('touchstart', onTouchStart, { passive: true });
 		feedEl?.addEventListener('touchmove', onTouchMove, { passive: true });
 		feedEl?.addEventListener('touchend', onTouchEnd, { passive: true });
 
-		// 0.5.4: sample the live <video> population for the debug overlay (off in prod).
 		if (settings.debugPlayback) {
 			sampleDebug();
 			debugTimer = setInterval(sampleDebug, 500);
@@ -391,14 +534,17 @@
 			clearTimeout(modeTimer);
 			clearTimeout(copyTimer);
 			clearInterval(debugTimer);
+			for (const v of pool) {
+				v.pause();
+				v.removeAttribute('src');
+				v.load();
+			}
 		};
 	});
 
-	// (Re)observe current cards whenever the visible list changes — undo re-adds a
-	// card node that must be observed. observe() is idempotent on already-tracked
-	// elements; detached (hidden) ones simply never fire. Single IO preserved.
+	// (Re)observe current cards whenever the visible list changes. observe() is idempotent.
 	$effect(() => {
-		const list = visible; // dependency: re-run when the rendered list changes
+		const list = visible;
 		if (!io) return;
 		for (let i = 0; i < list.length; i++) {
 			const el = cardEls[i];
@@ -406,26 +552,30 @@
 		}
 	});
 
+	// THE pool driver: reassign + reparent + play whenever the active index moves, the feed
+	// grows, or a shell slot (re)registers. Reads those reactive deps; everything it mutates
+	// (slotToCard is plain; cardRevealed/active* are state set imperatively) is kept off the
+	// dependency set via untrack so this can't self-loop.
+	$effect(() => {
+		void activeIndex;
+		void visible.length;
+		void cardSlotByName;
+		untrack(() => syncPool());
+	});
+
 	$effect(() => {
 		saveMute(feedName, muted);
 	});
-
 	$effect(() => {
 		saveInfo(feedName, infoOpen);
 	});
-
 	$effect(() => {
 		saveAutoAdvance(feedName, autoAdvance);
 	});
 
-	// Lazy-load the next page as the active card nears the loaded tail. Reads
-	// activeIndex + visible.length so it re-evaluates on scroll and after each
-	// append (catching up if still near the end). `loadMore` self-guards against
-	// overlap and the total cap.
+	// Lazy-load the next page as the active card nears the loaded tail.
 	$effect(() => {
-		if (activeIndex >= visible.length - (settings.preloadAhead + 3)) {
-			loadMore();
-		}
+		if (activeIndex >= visible.length - (settings.preloadAhead + 3)) loadMore();
 	});
 </script>
 
@@ -439,28 +589,27 @@
 {:else}
 	<div class="feed" bind:this={feedEl}>
 		{#each visible as item, i (item.name)}
-			{@const ws = windowState(i)}
-			<!-- The .card cell ALWAYS renders (100dvh, data-index, IO-observed) so
-			     scroll height + the single-IO windowing are intact; only the heavy
-			     VideoCard inside it mounts for windowed cards — off-window cards get
-			     a cheap placeholder, capping live <video>s to the window regardless
-			     of feed size. active is always live (feedWindow guarantee), so the
-			     active card always mounts the real player. -->
+			<!-- The .card cell ALWAYS renders (100dvh, data-index, IO-observed) so scroll
+			     height + single-IO windowing are intact. Within the mount window it renders
+			     the cheap VideoCard SHELL (no <video> — Feed parks a pooled element into its
+			     slot); off-window cards get a bare placeholder. -->
 			<div class="card" data-index={i} bind:this={cardEls[i]}>
-				{#if ws.live}
+				{#if isLive(i)}
 					<VideoCard
 						{item}
 						active={i === activeIndex}
-						preload={ws.preload}
-						{muted}
-						{autoAdvance}
 						{viewportAR}
 						posters={settings.posters}
-						onfinished={() => scrollTo(activeIndex + 1)}
-						onready={() => (activeReady = true)}
-						onblocked={(b) => (activeBlocked = b)}
-						debug={settings.debugPlayback}
-						ondebug={(kind, detail) => pushDebug(i, kind, detail)}
+						revealed={cardRevealed[i] ?? false}
+						buffering={i === activeIndex && activeBuffering}
+						blocked={i === activeIndex && activeBlocked}
+						paused={i === activeIndex && activePaused}
+						currentTime={i === activeIndex ? activeCurrentTime : 0}
+						duration={i === activeIndex ? activeDuration : 0}
+						onslot={(el) => registerSlot(item.name, el)}
+						onseek={seekActiveFrac}
+						onseekby={seekActiveBy}
+						ontap={tapActive}
 					/>
 				{:else}
 					<div class="card-rest">
@@ -520,6 +669,25 @@
 {/if}
 
 <style>
+	/* The pooled <video> elements are foreign nodes Feed parks into card shells, so they
+	   can't be styled by VideoCard's scoped CSS — style them globally here. Mirrors the old
+	   per-card <video>: fill the cell, cover-fit (contain for off-aspect), reveal cross-fade. */
+	:global(.pool-video) {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		opacity: 0;
+		transition: opacity 0.25s ease;
+	}
+	:global(.pool-video.revealed) {
+		opacity: 1;
+	}
+	:global(.pool-video.contain) {
+		object-fit: contain;
+	}
+
 	.empty {
 		display: flex;
 		flex-direction: column;
@@ -536,9 +704,6 @@
 		font-size: 0.85rem;
 	}
 
-	/* Cheap stand-in for off-window cards (no <video>, no decoder). Mirrors the
-	   VideoCard pre-load placeholder so scrolling past unmounted cards looks
-	   identical to a not-yet-loaded one. */
 	.card-rest {
 		display: flex;
 		align-items: flex-end;
@@ -567,10 +732,6 @@
 		pointer-events: none;
 	}
 
-	/* The ID row is a tap-to-copy button. The overlay is pointer-events:none, so
-	   re-enable events here; the icon hints the affordance and the id itself is
-	   user-select:text so a long-press → Copy works if the clipboard API is
-	   blocked. */
 	.info-name {
 		display: flex;
 		align-items: center;
@@ -645,9 +806,6 @@
 		transform: scale(0.95);
 	}
 
-	/* 0.5.4 diagnostic overlay — only rendered when DEBUG_PLAYBACK is on. Top-left,
-	   monospace, pinned above content; pointer-events:none so it never intercepts
-	   scroll/tap. Never shown on a release deploy. */
 	.debug-overlay {
 		position: fixed;
 		top: calc(env(safe-area-inset-top) + 0.25rem);
