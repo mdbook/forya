@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { HAVE_CURRENT_DATA, isMediaReady, shouldRetryOnPlayable } from '../src/lib/playback';
 
-const base = { active: true, paused: false, hasPlayed: false, errored: false, blessed: true };
+const base = { active: true, paused: false, hasPlayed: false, errored: false };
 
 describe('shouldRetryOnPlayable', () => {
 	it('retries an active, fresh, un-paused, un-errored card (the recovery case)', () => {
@@ -29,8 +29,12 @@ describe('shouldRetryOnPlayable', () => {
 		expect(shouldRetryOnPlayable({ ...base, errored: true })).toBe(false);
 	});
 
-	it('does NOT retry before the pool is blessed (0.6 start-paused — the self-heal is a post-bless recovery; muted-autoplaying the active card pre-bless causes the first-bless-pause / two-tap)', () => {
-		expect(shouldRetryOnPlayable({ ...base, blessed: false })).toBe(false);
+	it('retries pre-bless too — the 0.6.1 model muted-autoplays the active card from load, and the retry is always a MUTED play (audible output is gated separately), so the self-heal must recover a cold pre-bless card', () => {
+		// Regression guard for the M2.5 `blessed` gate REMOVAL (0.6.1): a fresh active card that
+		// has not yet been blessed must still self-heal its muted autoplay on canplay.
+		expect(
+			shouldRetryOnPlayable({ active: true, paused: false, hasPlayed: false, errored: false })
+		).toBe(true);
 	});
 
 	it('requires ALL conditions — any single disqualifier blocks the retry', () => {
@@ -39,8 +43,7 @@ describe('shouldRetryOnPlayable', () => {
 				active: false,
 				paused: true,
 				hasPlayed: true,
-				errored: true,
-				blessed: false
+				errored: true
 			})
 		).toBe(false);
 	});

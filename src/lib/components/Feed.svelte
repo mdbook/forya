@@ -11,12 +11,16 @@
 	// Blessing model (harness-proven on iOS 26.5.1, bus #422): iOS's "may-play-unmuted"
 	// permission is PER-ELEMENT + durable — a continuously-playing element unmuted once in a
 	// gesture (section A) carries sound across ≥6 src-swaps + a 20s idle; an off-gesture
-	// muted→unmuted toggle on such a blessed element never re-pauses (section D). So the
-	// sound-on tap blesses the whole pool (unmute+play each in-gesture, re-mute neighbours),
-	// neighbours stay continuously playing muted, and becoming-active is just a D-safe
-	// off-gesture unmute. The always-muted cure (0.5.5) is preserved: we NEVER issue an
-	// unmuted play() off-gesture — play() is always muted, unmute happens only once the
-	// element is confirmed playing. Decoder count is bounded by POOL_SIZE (< the old ~6).
+	// muted→unmuted toggle on such a blessed element never re-pauses (section D). So every
+	// pool element MUTED-autoplays continuously from load (0.6.1, reverting 0.6.0's start-
+	// paused #472), and the sound-on tap blesses the whole pool with a bare SYNCHRONOUS
+	// muted=false flip on those already-playing elements (re-muting neighbours at once) —
+	// WebKit grants the unmute because the element is already playing in a gesture, sidestep-
+	// ping the "start audible from a buffered paused element" decision it refuses (the 0.6.0
+	// first-card two-tap wall — see two-tap-investigation.md). Becoming-active is then just a
+	// D-safe off-gesture unmute. The always-muted cure (0.5.5) is preserved: we NEVER issue an
+	// unmuted play() off-gesture — every play() is muted, unmute is only ever a flip on an
+	// already-playing element. Decoder count is bounded by POOL_SIZE (< the old ~6).
 	import { onMount, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import VideoCard from './VideoCard.svelte';
@@ -390,15 +394,14 @@
 			if (s === aSlot) continue;
 			const v = pool[s];
 			v.muted = true; // neighbours are always silent
-			if (blessed && v.src) {
-				// Post-bless: keep neighbours CONTINUOUSLY playing (muted) so that when one
-				// becomes active it's an off-gesture unmute on an already-playing blessed element
-				// (harness D), never a pause→play→unmute (untested). This is the TikTok recycler.
-				if (v.paused) v.play().catch(() => {});
-			} else {
-				// Pre-bless (muted feed, M1 behaviour): only the active card plays (battery).
-				v.pause();
-			}
+			// Neighbours play CONTINUOUSLY muted (0.6.1 — pre- AND post-bless, no longer paused
+			// pre-bless) so that (a) the bless gesture only has to flip muted=false on an already-
+			// playing element — the clean WebKit-granted unmute — and (b) a becoming-active
+			// neighbour is an off-gesture unmute on an already-playing blessed element (harness D),
+			// never a pause→play→unmute. Muted autoplay is gesture-free + audio-free, so the cure
+			// holds. This is the TikTok recycler. (A neighbour MUST be playing at bless time or its
+			// per-element grant never mints → its later becoming-active unmute would pause it.)
+			if (v.src && v.paused) v.play().catch(() => {});
 		}
 		if (aSlot < 0) return;
 		const v = pool[aSlot];
@@ -406,32 +409,23 @@
 		// feed growth — which must never re-seek/re-load a card that's already active).
 		const fresh = activeIndex !== lastDrivenActive;
 		if (fresh) {
-			// Restart the clip from the top. Post-bless the active el may have been a neighbour
-			// pre-rolling muted off-screen (~Xs in), so without this it would resume mid-clip (the
-			// skip-ahead the operator saw, worse under auto-advance's faster cadence).
+			// Restart the clip from the top. The active el may have been a neighbour pre-rolling
+			// muted off-screen (~Xs in), so without this it would resume mid-clip (the skip-ahead
+			// the operator saw, worse under auto-advance's faster cadence).
 			v.currentTime = 0;
 			lastDrivenActive = activeIndex;
 		}
 		activeDuration = v.duration || 0;
 		activeCurrentTime = v.currentTime || 0;
 		activeBuffering = false;
-		if (!blessed) {
-			// Pre-bless: do NOT autoplay. Hold the active card paused on its poster with the play
-			// affordance showing; the first tap (tapActive / toggleMute) plays it WITH sound from
-			// IDLE — the only state iOS authorizes for audible output. (Muted-autoplaying it here
-			// and unmuting on the tap is what paused the first card — the first-bless-pause.)
-			v.pause();
-			activePaused = true;
-			// WARM the buffer so that first tap plays in ONE tap. iOS throttles preload=auto for
-			// PAUSED elements, so without this the start-paused active card is cold → tap-1 only
-			// kicks the load, tap-2 plays (the double-tap, #480). v.load() starts buffering
-			// WITHOUT playing — gesture-free, audio-free, trips neither the play-gate nor the
-			// audible-gate, so the cure-shape (no ungestured play()) is intact (review #481); it
-			// also makes canplay fire, so the post-bless self-heal can auto-play any residual
-			// cold tap-1 without a second tap. Only on a fresh active card (not every re-park).
-			if (fresh) v.load();
-			return;
-		}
+		// MUTED-autoplay the active card (0.6.1, reverts start-paused #472). tryPlayActive forces
+		// muted on a fresh/paused start and onActivePlaying→assertActiveAudio keeps it muted until
+		// the pool is blessed, so nothing audible plays off-gesture (the cure holds). Keeping it
+		// continuously playing-muted is exactly what lets the first tap bless via a bare synchronous
+		// muted=false flip on an already-playing element (blessPool) — the fix for the 0.6.0 first-
+		// card two-tap (a buffered PAUSED element's in-gesture unmute is the path WebKit refused;
+		// see two-tap-investigation.md). The canplay self-heal (shouldRetryOnPlayable) recovers a
+		// cold card whose first muted-autoplay rejected before its buffer arrived.
 		tryPlayActive(v);
 	}
 
@@ -567,9 +561,10 @@
 		const v = activeVideo();
 		if (!v) return;
 		if (!blessed) {
-			// First interaction = the initiating gesture: play the active card WITH sound + bless
-			// the pool. The element is idle (never autoplayed pre-bless) so this gesture-play is
-			// authorized for audible output (operator-approved start-paused model, #472).
+			// First interaction = the initiating gesture. The active card is ALREADY muted-
+			// autoplaying (0.6.1), so blessing is a bare synchronous muted=false flip in this
+			// gesture (blessPool) — the canonical iOS tap-to-unmute that sidesteps the buffered-
+			// paused-element unmute WebKit refused (the 0.6.0 two-tap, #570). Sound on.
 			muted = false;
 			blessPool();
 			return;
@@ -584,40 +579,43 @@
 		}
 	}
 
-	// Bless the whole pool in the current user gesture: unmute + play() each element (so each
-	// is "playing + unmuted in a gesture" — harness A's precondition for a durable per-element
-	// grant), then immediately re-mute the neighbours (harness D: false→true on a blessed,
-	// playing element never re-pauses). MUST be called synchronously from a real gesture
-	// (toggleMute's click / a touchend). Idempotent-safe but only the first call matters.
-	// Called from the FIRST user gesture (tapActive / toggleMute). Pre-bless every pool element
-	// is IDLE (paused on its poster — nothing muted-autoplays now), so play()ing each one here,
-	// inside the gesture, is a fresh gesture-INITIATED start that iOS authorizes for audible
-	// output — the durable per-element bless. (The earlier bug: an element mid muted-autoplay
-	// could NOT be unmuted off-gesture, and a synchronous pause→play on it didn't re-mint the
-	// activation on-device. Playing a genuinely idle element fresh in the gesture does — exactly
-	// why the paused neighbours always blessed cleanly.) Active stays unmuted; neighbours are
-	// re-muted at once (D-safe, no multi-audio blip).
+	// Bless the whole pool in the current user gesture: flip each element's muted=false (the
+	// per-element, durable iOS audible-output grant — harness A), then immediately re-mute the
+	// neighbours (harness D: false→true on a blessed, playing element never re-pauses). The flip
+	// is a BARE SYNCHRONOUS muted=false — NO pause(), NO play(), NO await/rAF/.then before it —
+	// because every pool element is ALREADY muted-autoplaying continuously (driveActive). That is
+	// the canonical iOS tap-to-unmute shape WebKit grants (the element is already playing in a
+	// gesture), and it sidesteps the buffered-PAUSED-element unmute WebKit refuses — the 0.6.0
+	// first-card two-tap (two-tap-investigation.md, #570). MUST be called synchronously from a
+	// real gesture (tapActive's tap / toggleMute's click / a touchend). Idempotent-safe but only
+	// the first call mints the grant. Active stays unmuted; neighbours re-muted at once (D-safe).
 	function blessPool() {
 		blessed = true;
 		activePaused = false;
 		activeBlocked = false;
 		const aSlot = slotForCard(activeIndex);
+		// Gesture-liveness at the moment of the bless (DEBUG probe #3, two-tap-investigation.md);
+		// surfaced as `ua=` in the overlay. If a FAILING tap ever shows ua=0, an async gap upstream
+		// burned the transient user-activation and we'd remove it; always ua=1 rules that out.
+		debugUserActivation =
+			typeof navigator !== 'undefined' && navigator.userActivation
+				? navigator.userActivation.isActive
+					? 1
+					: 0
+				: -1;
 		for (let s = 0; s < pool.length; s++) {
 			const v = pool[s];
 			if (!v.src) continue;
-			v.pause(); // ensure idle, then a fresh gesture-initiated play() below
-			v.muted = false; // unmute IN-gesture — the bless (per-element, durable)
-			const p = v.play();
-			if (p && typeof p.then === 'function') p.catch(() => {});
+			v.muted = false; // the bless: a bare synchronous unmute of an already-playing element
 			if (s !== aSlot) v.muted = true; // re-mute neighbours at once (no multi-audio blip)
 		}
 	}
 
 	function toggleMute() {
 		if (!blessed) {
-			// First interaction via the rail (before any tap on the video): initiate playback
-			// WITH sound + bless the pool, same as the first tapActive (start-paused model, #472).
-			// Pre-bless nothing is playing, so an in-place mute toggle would be meaningless.
+			// First interaction via the rail (the muted-icon "tap to unmute" affordance): flip
+			// muted=false + bless the pool in this gesture, same as the first tapActive (0.6.1).
+			// The active card is already muted-autoplaying, so this is the clean in-gesture unmute.
 			muted = false;
 			blessPool();
 			return;
@@ -686,6 +684,10 @@
 	let debugCounts = $state('');
 	let debugTimer: ReturnType<typeof setInterval> | undefined;
 	let debugSeq = 0;
+	// navigator.userActivation.isActive captured inside blessPool at the bless flip (two-tap
+	// probe #3). Plain (non-reactive) — read only by sampleDebug for the overlay. -1 = not yet
+	// blessed / API absent, 0 = inactive at bless (transient activation lapsed → bad), 1 = active.
+	let debugUserActivation = -1;
 
 	function pushDebug(idx: number, kind: string, detail?: string) {
 		if (!settings.debugPlayback) return;
@@ -712,19 +714,19 @@
 		// prewarm is reused, rs should reach ≥3 (HAVE_FUTURE_DATA) BEFORE the first tap on a
 		// cold card; stuck at 0–1 means Safari isn't reusing the prefetch.
 		const rs = activeVideo()?.readyState ?? -1;
-		debugCounts = `build=${sha} pool=${pool.length} live=${vids.length} play=${playing} data=${data} active=${activeIndex} rs=${rs} blk=${activeBlocked ? 1 : 0} bless=${blessed ? 1 : 0} snd=${snd}`;
+		debugCounts = `build=${sha} pool=${pool.length} live=${vids.length} play=${playing} data=${data} active=${activeIndex} rs=${rs} blk=${activeBlocked ? 1 : 0} bless=${blessed ? 1 : 0} snd=${snd} ua=${debugUserActivation}`;
 	}
 
 	onMount(() => {
 		readViewport();
-		// Start "paused-but-unmuted" (operator-approved, #472): the active card does NOT
-		// muted-autoplay on load — it sits paused on its poster (see driveActive's pre-bless
-		// branch) with sound-intent on (muted=false → rail shows unmuted). The first tap (video
-		// or rail) is a genuine gesture-initiated play-WITH-sound on an IDLE element, which iOS
-		// authorizes for audible output + blesses the pool. This sidesteps the audible-output
-		// gate that paused the first card when we tried to unmute a mid-muted-autoplay element
-		// (the first-bless-pause). A reload recreates the pool fresh, so the bless is per-session.
-		muted = false;
+		// Start MUTED-autoplaying (0.6.1, reverts the 0.6.0 start-paused model #472): the active
+		// card muted-autoplays on load (see driveActive) and the rail shows the muted icon — the
+		// natural "tap to unmute" affordance. The first tap (video or rail) flips muted=false
+		// synchronously in the gesture on the already-playing element, which iOS grants for audible
+		// output + blesses the pool (blessPool). This is the canonical iOS tap-to-unmute shape and
+		// sidesteps the buffered-paused-element unmute WebKit refused — the 0.6.0 first-card two-tap
+		// (two-tap-investigation.md). A reload recreates the pool fresh, so the bless is per-session.
+		muted = true;
 		infoOpen = loadInfo(feedName);
 		autoAdvance = loadAutoAdvance(feedName, settings.autoAdvance);
 		for (const n of loadHidden(feedName)) hidden.add(n);
@@ -756,8 +758,7 @@
 						active: true,
 						paused: activePaused,
 						hasPlayed: cardRevealed[activeIndex] ?? false,
-						errored: false,
-						blessed
+						errored: false
 					})
 				)
 					tryPlayActive(v);
