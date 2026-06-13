@@ -14,7 +14,7 @@
 	import { flushSync, onDestroy, untrack } from 'svelte';
 	import Play from '@lucide/svelte/icons/play';
 	import { pickFit } from '$lib/fit';
-	import { shouldRetryOnPlayable } from '$lib/playback';
+	import { isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
 	import type { FeedItem } from '$lib/types';
 
 	let {
@@ -186,6 +186,24 @@
 						// once the media is ready (`retryIfPlayable`). A genuine decode error
 						// releases via the element's `onerror` — that's the real cascade case.
 						blocked = true;
+						// Pure-race edge (0.5.1): if the media is ALREADY playable here, this
+						// wasn't a buffering gap — it lost a decoder-handover race, and
+						// canplay/loadeddata already fired so the event self-heal can't catch
+						// it. Do ONE bounded, gen-guarded delayed re-attempt (not polling) to
+						// break the race; a not-yet-buffered card (readyState below current-
+						// data) is left to the canplay path instead.
+						if (el && isMediaReady(el.readyState)) {
+							setTimeout(() => {
+								if (gen !== playGen || !active || !el) return;
+								el.play()
+									.then(() => {
+										if (gen === playGen) blocked = false;
+									})
+									.catch(() => {
+										/* leave blocked → tap-to-play; one delayed retry only */
+									});
+							}, 250);
+						}
 					});
 			});
 		});

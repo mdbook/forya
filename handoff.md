@@ -190,9 +190,15 @@ is operator-on-device, criterion 3):
   moment it can instead of sitting dark. `tryPlay` bumps `playGen`, so stale fires
   no-op and a success (`hasPlayed`) short-circuits further retries; the predicate
   requires `active && !paused && !hasPlayed && !errored`, so it never overrides a
-  user pause or loops on a hard error. This fixed the two pre-existing 0.4.x
-  on-device residuals (fast-scroll-settled card dark; isolated rejection on a
-  conformant clip).
+  user pause or loops on a hard error. **Plus a complementary race path:** if a
+  `play()` rejection happens when the media is ALREADY playable
+  (`isMediaReady(el.readyState)` — a lost decoder-handover race, where
+  `canplay`/`loadeddata` already fired and won't re-fire), `tryPlay` schedules ONE
+  bounded gen-guarded delayed re-attempt (~250ms, not polling). The two paths are
+  mutually exclusive by `readyState`: a not-yet-buffered card waits on `canplay`,
+  an already-buffered one gets the delayed retry. Together these fixed the two
+  pre-existing 0.4.x on-device residuals (fast-scroll-settled card dark; isolated
+  rejection on a conformant clip).
 - **Cascade guards (0.4) — a failed autoplay must not break the NEXT card.**
   `VideoCard` has three guards, all in the play path: (1) **generation token**
   `playGen` — every attempt takes `gen = ++playGen`; the rAF retry + both

@@ -29,3 +29,18 @@ export interface PlaybackState {
 export function shouldRetryOnPlayable(s: PlaybackState): boolean {
 	return s.active && !s.paused && !s.hasPlayed && !s.errored;
 }
+
+/** `HTMLMediaElement.readyState` value: at least the current frame is decoded. */
+export const HAVE_CURRENT_DATA = 2;
+
+/**
+ * Is the media already playable (has current data) at the moment a `play()`
+ * attempt rejected? If so the rejection was a transient decoder-handover race,
+ * NOT a buffering gap — `canplay`/`loadeddata` already fired and won't re-fire,
+ * so the event-driven self-heal can't catch it; the caller schedules one bounded
+ * delayed re-attempt instead. A not-yet-buffered card (readyState below this)
+ * is left to the `canplay` path, which fires when its buffer arrives.
+ */
+export function isMediaReady(readyState: number): boolean {
+	return readyState >= HAVE_CURRENT_DATA;
+}

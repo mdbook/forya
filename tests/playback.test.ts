@@ -4,7 +4,7 @@
 // table here is the whole policy surface; the component just wires it to
 // canplay/loadeddata and guards the attempt with its generation token.
 import { describe, expect, it } from 'vitest';
-import { shouldRetryOnPlayable } from '../src/lib/playback';
+import { HAVE_CURRENT_DATA, isMediaReady, shouldRetryOnPlayable } from '../src/lib/playback';
 
 const base = { active: true, paused: false, hasPlayed: false, errored: false };
 
@@ -33,5 +33,18 @@ describe('shouldRetryOnPlayable', () => {
 		expect(
 			shouldRetryOnPlayable({ active: false, paused: true, hasPlayed: true, errored: true })
 		).toBe(false);
+	});
+});
+
+describe('isMediaReady (decoder-handover-race vs late-buffer)', () => {
+	it('treats HAVE_CURRENT_DATA and above as ready (race → schedule a delayed retry)', () => {
+		expect(isMediaReady(HAVE_CURRENT_DATA)).toBe(true); // HAVE_CURRENT_DATA (2)
+		expect(isMediaReady(3)).toBe(true); // HAVE_FUTURE_DATA
+		expect(isMediaReady(4)).toBe(true); // HAVE_ENOUGH_DATA
+	});
+
+	it('treats below HAVE_CURRENT_DATA as not-yet-buffered (leave it to canplay)', () => {
+		expect(isMediaReady(0)).toBe(false); // HAVE_NOTHING
+		expect(isMediaReady(1)).toBe(false); // HAVE_METADATA
 	});
 });

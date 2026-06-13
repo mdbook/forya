@@ -19,7 +19,11 @@ config/scan) is byte-untouched, and the 0.4.0 cascade guard is intact.
 - **Autoplay self-heal:** the active `<video>` now re-attempts play on
   `canplay`/`loadeddata` (when the media reports it can play) via the pure,
   tested `shouldRetryOnPlayable` (`src/lib/playback.ts`) — so a settled-but-not-
-  yet-buffered card plays the moment it's ready instead of going dark.
+  yet-buffered card plays the moment it's ready instead of going dark. For the
+  complementary case — an already-buffered clip that lost a decoder-handover race
+  (where `canplay` already fired and won't re-fire) — a single bounded,
+  generation-guarded delayed re-attempt fires when `isMediaReady(readyState)` at
+  rejection time. The two paths are mutually exclusive by `readyState`.
 - **Release only on real errors:** a transient `play()` rejection now surfaces
   tap-to-play but keeps `src` (so the self-heal can fire). Dropping `src` to free
   the decoder is reserved for a genuine media `error` (the actual cascade case)
