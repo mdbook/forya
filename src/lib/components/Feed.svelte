@@ -154,6 +154,37 @@
 		v.classList.toggle('contain', f === 'contain');
 	}
 
+	// ── M2.4 prewarm-fetch (review #491) ──────────────────────────────────────────
+	// The cold-start two-tap is data-not-ready-at-tap, not a play-path problem: on a cold
+	// element the in-gesture play() can't START within iOS's activation window (no bytes),
+	// so the per-element bless never mints and the later canplay self-heal plays OUTSIDE the
+	// window → tap-2. Lever: warm the HTTP CACHE (not the element's play-state) with each
+	// covered card's first ~1MB (moov + first GOPs) via a side-channel Range fetch, so the
+	// element's own load()/play() is served from cache and ready in time. This is decoupled
+	// from the <video> → zero play-state change → cure-shape fully intact (a fetch() is not a
+	// play()). Fires for active±1 (the coverage window) as each card enters it; v.load() is
+	// KEPT (driveActive). Whether Safari actually reuses the partial for the <video>'s OWN
+	// range requests is the make-or-break unknown (#491) — MEASURED on-device via the overlay
+	// `rs=` (active el readyState): rs≥3 before tap-1 = prewarm works; stuck 0–1 on a cold
+	// card = Safari isn't reusing it and we escalate the lever.
+	const PREWARM_BYTES = 1024 * 1024; // first 1 MB
+	// url → fetch kicked off (dedupe; the HTTP cache is the target). Plain object, NOT a
+	// SvelteSet: deliberately non-reactive, read only imperatively from prewarm() under the
+	// syncPool untrack (same philosophy as the plain `pool`/`slotToCard`).
+	const prewarmed: Record<string, true> = {};
+	function prewarm(url: string) {
+		if (typeof fetch === 'undefined' || prewarmed[url]) return;
+		prewarmed[url] = true;
+		// Range-capped at 1 MB so we never pull the whole file; same endpoint + 206 path the
+		// <video> uses (server Range support is the reason this app exists — guarded by
+		// range.test.ts). Body drained so the partial is committed to cache. Fire-and-forget.
+		fetch(url, { headers: { Range: `bytes=0-${PREWARM_BYTES - 1}` } })
+			.then((res) => res.arrayBuffer())
+			.catch(() => {
+				delete prewarmed[url]; // transient/offline — let a later syncPool retry
+			});
+	}
+
 	// The always-muted cure (0.5.5), ported to act on the active pooled element. Muted
 	// autoplay is gesture-free; a transient reject on a freshly-(re)src'd element retries
 	// once on the next frame, then surfaces tap-to-play (`blocked`) without releasing —
@@ -300,6 +331,9 @@
 				// unmutes it once playing. Either way the per-element blessing survives the swap
 				// (harness A).
 				v.muted = true;
+				// Warm this card's first bytes into the HTTP cache as it enters the coverage
+				// window (active±1), so its load()/play() is ready within the first tap (M2.4).
+				prewarm(item.url);
 			}
 			// (Re)park into the card's shell slot (resolved by stable name).
 			const slotDiv = cardSlotByName[item.name] ?? null;
@@ -610,7 +644,11 @@
 		const snd = activeVideo()?.muted === false ? 1 : 0;
 		let playing = 0;
 		for (const v of pool) if (!v.paused) playing++;
-		debugCounts = `build=${sha} pool=${pool.length} live=${vids.length} play=${playing} data=${data} active=${activeIndex} blk=${activeBlocked ? 1 : 0} bless=${blessed ? 1 : 0} snd=${snd}`;
+		// rs = active element's readyState (M2.4 prewarm probe, review #491): if the cache
+		// prewarm is reused, rs should reach ≥3 (HAVE_FUTURE_DATA) BEFORE the first tap on a
+		// cold card; stuck at 0–1 means Safari isn't reusing the prefetch.
+		const rs = activeVideo()?.readyState ?? -1;
+		debugCounts = `build=${sha} pool=${pool.length} live=${vids.length} play=${playing} data=${data} active=${activeIndex} rs=${rs} blk=${activeBlocked ? 1 : 0} bless=${blessed ? 1 : 0} snd=${snd}`;
 	}
 
 	onMount(() => {
