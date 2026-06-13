@@ -239,11 +239,20 @@
 		if (active) {
 			untrack(() => {
 				// Fresh attempt on (re)activation: re-attach src if it was released by
-				// an earlier error, clear the blocked/errored affordances, then play.
+				// an earlier error, clear the blocked/errored affordances.
 				released = false;
 				errored = false;
 				blocked = false;
-				tryPlay(v);
+				// Readiness-gate the FIRST play (0.5.4): only eager-play if the media is
+				// already playable (readyState ≥ HAVE_CURRENT_DATA). A COLD activation
+				// play() (card the feed just scrolled to, not yet buffered) is what trips
+				// iOS's `NotAllowedError` autoplay-policy reject — and that first reject
+				// can revoke autoplay doc-wide (instrumentation #326: NotAllowedError is
+				// the TRIGGER, not decoder exhaustion — `live` stayed flat). So if it's
+				// cold, DON'T eager-play; the `canplay`/`loadeddata` self-heal
+				// (`retryIfPlayable`) plays it the moment it's actually ready — the first
+				// play() then lands on a warm element and doesn't trip the policy reject.
+				if (isMediaReady(v.readyState)) tryPlay(v);
 			});
 		} else {
 			untrack(() => {
