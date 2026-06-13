@@ -26,7 +26,8 @@
 		viewportAR,
 		posters,
 		onfinished,
-		onready
+		onready,
+		onblocked
 	}: {
 		item: FeedItem;
 		active: boolean;
@@ -44,6 +45,11 @@
 		/** Fired when THIS card (while active) reaches `playing` — Feed uses it to
 		 *  release the readiness gate so neighbours may start preloading (0.4). */
 		onready?: () => void;
+		/** Fired (while active) whenever this card's autoplay-`blocked` state changes
+		 *  (0.5.3) — Feed tracks it as `activeBlocked` so a user gesture can re-grant
+		 *  iOS's document-wide autoplay permission with a synchronous in-gesture
+		 *  `play()`. Distinct from a user pause, so it never fights one. */
+		onblocked?: (blocked: boolean) => void;
 	} = $props();
 
 	let el = $state<HTMLVideoElement>();
@@ -237,6 +243,17 @@
 		if (v) v.muted = muted;
 	});
 
+	// Report autoplay-`blocked` to Feed (0.5.3) — but ONLY while this card is the
+	// active one. The `if (active)` short-circuit means an inactive card never
+	// tracks `blocked`, so a scrolled-past card can't clobber Feed's `activeBlocked`
+	// (which it also resets on every active-index change). Feed uses this to fire a
+	// synchronous in-gesture `play()` and re-grant iOS's document-wide autoplay
+	// permission. Reads `blocked` (a rejected muted-autoplay) — never `paused`, so
+	// the gesture-unlock can't fight an intentional user pause.
+	$effect(() => {
+		if (active) onblocked?.(blocked);
+	});
+
 	// Explicit decoder release on unmount: when the card leaves the window Feed
 	// unmounts this component, so detach the source and load() to free the iOS
 	// decoder deterministically rather than waiting on GC.
@@ -325,22 +342,27 @@
 		}}
 	></video>
 
-	{#if !hasPlayed}
-		<div class="placeholder">
-			{#if posterUrl}
-				<img
-					class="poster"
-					class:shown={posterOk}
-					class:contain={fit === 'contain'}
-					src={posterUrl}
-					alt=""
-					onload={() => (posterOk = true)}
-					onerror={() => (posterOk = false)}
-				/>
-			{/if}
-			<span class="caption">{item.name}</span>
-		</div>
-	{/if}
+	<!-- Reveal cross-fade (0.5.3): the placeholder (gradient + poster + caption)
+	     stays mounted and fades out over the SAME 0.25s the <video> fades IN, so the
+	     black .media bg never shows through for a frame (the #287 black flash). It's
+	     gated purely on `hasPlayed`, so a card that errors (never paints) just keeps
+	     the poster up rather than getting stuck — no held-poster edge case. The
+	     placeholder is pointer-events:none so the full-bleed tap target underneath
+	     still receives taps even while it's faded but mounted. -->
+	<div class="placeholder" class:revealed={hasPlayed}>
+		{#if posterUrl}
+			<img
+				class="poster"
+				class:shown={posterOk}
+				class:contain={fit === 'contain'}
+				src={posterUrl}
+				alt=""
+				onload={() => (posterOk = true)}
+				onerror={() => (posterOk = false)}
+			/>
+		{/if}
+		<span class="caption">{item.name}</span>
+	</div>
 
 	{#if showSpinner}
 		<div class="spinner" aria-hidden="true"></div>
@@ -415,6 +437,17 @@
 		align-items: flex-end;
 		padding: 1.5rem;
 		background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+		/* Decorative only — let taps fall through to the full-bleed .tap button even
+		   while the placeholder is mounted-but-faded during the reveal cross-fade. */
+		pointer-events: none;
+		/* Matches video's reveal transition so the two cross-fade (no black flash). */
+		transition: opacity 0.25s ease;
+	}
+
+	/* Faded out once the video has painted, revealing it underneath. Kept mounted
+	   (not {#if}-removed) so the fade actually runs instead of a hard cut. */
+	.placeholder.revealed {
+		opacity: 0;
 	}
 
 	/* Generated poster (0.5/M3): covers the gradient once it loads. Hidden until a

@@ -4,6 +4,37 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.5.3 — gesture-unlock autoplay recovery + poster cross-fade
+
+Fixes the **document-wide** iOS autoplay break the operator reproduced on-device
+(#287): a single muted-`play()` rejection (~1 in 8 cards) doesn't just stall one
+card — it revokes autoplay permission for the **whole document**, so every later
+card also stops autoplaying until a real user gesture restores it ("one tap
+unlocks all"). This is a different axis from 0.4.0 (decoder cascade) and 0.5.1
+(per-card buffer/race), and it's why 0.5.1's self-heal couldn't catch it — the
+block is gesture-level, not buffer-level. Root cause: 0.4.0 removed the
+session-scoped gesture-unlock path (`playback.svelte.ts`), leaving no recovery.
+Frontend only; the serving layer is byte-untouched and the cascade guard /
+single-IntersectionObserver invariants are intact.
+
+### Fixed
+
+- **Document-wide autoplay revocation:** Feed now re-attempts `play()` on the
+  active card **synchronously inside the next user gesture** (`touchend` + `click`,
+  both passive) whenever that card is autoplay-`blocked`. Running the call in the
+  gesture's stack is what re-grants iOS's document-wide permission; the active
+  card plays and every subsequent card autoplays again via its normal path. The
+  retry fires only when blocked — never over an intentional pause, and a no-op on
+  a healthy card. `touchend` (not `pointerup`) because a scroll-fling fires
+  `pointercancel` and stops pointer events, exactly the case being recovered.
+  Decision extracted to the pure `shouldGestureUnlock` (unit-tested); VideoCard
+  reports its blocked state to Feed via a new `onblocked` callback. The 0.5.1
+  self-heal is kept — it still catches the non-revoked buffer/handover cases.
+- **Poster → video black flash:** the placeholder (gradient + poster) now stays
+  mounted and cross-fades out over the same 0.25s the `<video>` fades in, instead
+  of hard-cutting on first paint — so the black `<video>` background no longer
+  shows through for a frame on reveal.
+
 ## 0.5.2 — tap-to-copy clip ID (debugging aid)
 
 A small operator-requested hotfix to unblock cataloguing which clips still

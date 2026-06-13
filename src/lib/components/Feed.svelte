@@ -21,6 +21,7 @@
 	} from '$lib/stores/prefs';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
 	import { feedWindow } from '$lib/window';
+	import { shouldGestureUnlock } from '$lib/playback';
 
 	let {
 		items,
@@ -79,6 +80,12 @@
 	// false on every active-index change (so a scroll re-prioritises the new
 	// about-to-play card), set true by the active card's `onready`.
 	let activeReady = $state(false);
+	// Is the CURRENT active card autoplay-`blocked` (a muted-play() rejection)? Fed
+	// by VideoCard's `onblocked` (which only the active card emits) and RESET to
+	// false on every active-index change (below) so a stale `blocked` from a
+	// scrolled-past card can't linger. Drives the gesture-unlock (0.5.3): when true,
+	// the next user touch re-grants iOS's document-wide autoplay permission.
+	let activeBlocked = $state(false);
 	let muted = $state(true);
 	let feedEl = $state<HTMLElement>();
 	let cardEls = $state<HTMLElement[]>([]);
@@ -203,6 +210,25 @@
 		return cardEls[activeIndex]?.querySelector('video') ?? null;
 	}
 
+	// Gesture-unlock (0.5.3) — the document-wide iOS autoplay-revocation recovery.
+	// On iOS a single muted-play() rejection (~1/8 cards) revokes autoplay for the
+	// WHOLE document until a real user gesture; thereafter every programmatic
+	// play() rejects, including the 0.5.1 self-heal. So when the active card is
+	// `blocked`, re-attempt play() SYNCHRONOUSLY inside the next user gesture — being
+	// in the gesture's call stack is exactly what re-grants iOS permission (a later
+	// microtask/$effect would not). That one in-gesture play() re-activates the doc;
+	// the card's own onplay/onplaying then clear `blocked`, and every later card
+	// autoplays again via its normal IO path ("one tap unlocks all"). Only fires
+	// when `activeBlocked` (never on a healthy card, and never over a user pause —
+	// `paused` is a separate flag), so on a clean card it's a no-op; on a deliberate
+	// tap it harmlessly races VideoCard's own togglePlay.
+	function gestureUnlock() {
+		if (!shouldGestureUnlock({ activeBlocked })) return;
+		activeVideo()
+			?.play()
+			.catch(() => {});
+	}
+
 	function scrollTo(index: number) {
 		const i = Math.max(0, Math.min(visible.length - 1, index));
 		cardEls[i]?.scrollIntoView({ behavior: 'smooth' });
@@ -268,6 +294,7 @@
 							dir = idx > activeIndex ? 1 : -1;
 							activeIndex = idx;
 							activeReady = false; // re-gate: prioritise the new about-to-play card
+							activeBlocked = false; // new card: clear stale blocked until it reports
 						}
 					}
 				}
@@ -276,8 +303,20 @@
 		);
 
 		for (const el of cardEls) if (el) io.observe(el);
+
+		// Gesture-unlock listeners (0.5.3): re-grant iOS autoplay on the next real
+		// touch when the active card is blocked. `touchend` (NOT pointerup — a
+		// scroll-fling fires pointercancel and stops sending pointer events, exactly
+		// the case we target) fires on finger-lift even after a scroll; `click` covers
+		// the desktop/discrete-tap path. Both PASSIVE — no preventDefault, zero scroll
+		// interference. `gestureUnlock` self-guards on `activeBlocked`.
+		feedEl?.addEventListener('touchend', gestureUnlock, { passive: true });
+		feedEl?.addEventListener('click', gestureUnlock, { passive: true });
+
 		return () => {
 			io?.disconnect();
+			feedEl?.removeEventListener('touchend', gestureUnlock);
+			feedEl?.removeEventListener('click', gestureUnlock);
 			clearTimeout(undoTimer);
 			clearTimeout(modeTimer);
 			clearTimeout(copyTimer);
@@ -348,6 +387,7 @@
 						posters={settings.posters}
 						onfinished={() => scrollTo(activeIndex + 1)}
 						onready={() => (activeReady = true)}
+						onblocked={(b) => (activeBlocked = b)}
 					/>
 				{:else}
 					<div class="card-rest">
