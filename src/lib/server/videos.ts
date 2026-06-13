@@ -36,31 +36,51 @@ export function isHidden(name: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Dir scan + in-process cache (invalidated by directory mtime, single-flight)
+// Dir scan + serve-stale-while-revalidate manifest (0.7.0)
+//
+// The request path must NEVER block on a CIFS scan: the 11.9k-file feed cold-
+// scanned in ~24s because it did one `fsp.stat` PER FILE (measured 23.7s; a bare
+// `readdir` of the same dir is 1.21s — SMB returns dir attrs inline, so the
+// per-file stats are the antipattern). So `getFeed()` (the REQUEST path) serves
+// the last-known-good manifest from memory INSTANTLY and only ever schedules a
+// revalidate in the background. A fresh/restarted container with no manifest yet
+// serves empty + `warming:true`; the client polls until the first background
+// scan lands (~1-2s) — never a blocking 24s request, and no persistence needed.
+//
+// The background scan is cheap (Approach B): on feeds WITHOUT the poster/meta
+// cache (DATA_DIR unset — the big liked/favorite feeds) it is one `readdir` with
+// NO per-file stat, dropping `size`/`mtime` that nothing there consumes (posters
+// off → no cache key; the UI shuffles → mtime order discarded; `size` is lazy-
+// fetched for the single open info card). On the poster feed (best) we keep the
+// full stat — `mtime` is the poster/meta cache key. Base order is by NAME (a
+// stable total order over unique filenames) so SSR + /api/feed seeded-shuffle
+// paging stay coherent WITHOUT depending on mtime.
 // ---------------------------------------------------------------------------
 
 interface ScanCache {
 	key: string;
-	/** Directory mtime (ms) the cached items were scanned at. A directory's mtime
-	 *  bumps on entry add/remove/rename — exactly when the manifest changes (incl.
-	 *  the `.partial` → final rename) — so we reuse the cache (any age) while it's
-	 *  unchanged and re-scan only when it moves. This replaced a short wall-clock
-	 *  TTL that was *shorter* than the largest feed's ~9-13s scan, so it was born
-	 *  expired and re-scanned almost every request. Edge: a file changed in place
-	 *  WITHOUT an add/remove won't bump the dir mtime → its updated mtime (sort
-	 *  order) is served stale until the next entry change. Negligible here
-	 *  (downloads are write-once). Bulletproof fallback if a mount ever fails to
-	 *  propagate entry changes to the dir mtime: a names-only readdir fingerprint
-	 *  (count + hash, mtime-independent) — not built; documented escape hatch. */
-	dirMtimeMs: number;
 	items: FeedItem[];
+	/** Directory mtime (ms) the items were scanned at. A dir's mtime bumps on entry
+	 *  add/remove/rename (incl. `.partial` → final), so a background revalidate
+	 *  re-walks only when it moved and otherwise just costs one dir-stat — and that
+	 *  stat is on the BACKGROUND path, never a request. */
+	dirMtimeMs: number;
+	/** When the last background revalidate was kicked (ms) — throttles routine
+	 *  revalidation to once per REVALIDATE_INTERVAL_MS so a busy feed doesn't
+	 *  re-scan on every request. */
+	checkedAt: number;
 }
 
+/** Eventual-consistency window: a viewed feed revalidates in the background at
+ *  most once per this interval, so new/removed clips appear within ~this long.
+ *  The revalidate is cheap (Approach B) and never blocks a request (SWR). */
+const REVALIDATE_INTERVAL_MS = 30_000;
+
 let scanCache: ScanCache | null = null;
-// Single-flight: concurrent requests for the same dir share one in-progress scan
-// instead of each launching their own (which stacked to 35-41s on the 11.9k-file
-// feed). Registered SYNCHRONOUSLY in scanVideos — before the first `await` — so
-// two concurrent callers can't both slip past the check.
+// Single-flight: concurrent revalidates for the same dir share one in-progress
+// scan instead of each launching their own (which stacked badly on the single-
+// connection mount). Registered SYNCHRONOUSLY in scanVideos — before the first
+// `await` — so two concurrent callers can't both slip past the check.
 let inflight: { key: string; promise: Promise<FeedItem[]> } | null = null;
 
 /** Clear the scan cache and any in-flight scan — test seam. */
@@ -79,9 +99,14 @@ async function dirMtimeMs(videoDir: string): Promise<number> {
 	}
 }
 
-/** The directory walk → manifest items, mtime-desc. Missing/unreadable dir →
- *  empty feed (not an error; stateless serving). */
-async function doScan(videoDir: string, ignoreHidden: boolean): Promise<FeedItem[]> {
+/** The directory walk → manifest items, name-asc. Missing/unreadable dir → empty
+ *  feed (not an error; stateless serving). When `cheap`, does NOT stat per file
+ *  (Approach B): `size`/`mtime` are left undefined. */
+async function doScan(
+	videoDir: string,
+	ignoreHidden: boolean,
+	cheap: boolean
+): Promise<FeedItem[]> {
 	let entries;
 	try {
 		entries = await fsp.readdir(videoDir, { withFileTypes: true });
@@ -95,34 +120,48 @@ async function doScan(videoDir: string, ignoreHidden: boolean): Promise<FeedItem
 		const name = ent.name;
 		if (ignoreHidden && isHidden(name)) continue;
 		if (!isVideoFile(name)) continue;
-		let st;
-		try {
-			st = await fsp.stat(path.join(videoDir, name));
-		} catch {
-			continue;
-		}
-		items.push({
+		const item: FeedItem = {
 			name,
 			url: `/api/media/${encodeURIComponent(name)}`,
-			size: st.size,
-			mtime: st.mtimeMs,
 			type: mimeFromExt(name)
-		});
+		};
+		// Approach B: on the cheap path skip the per-file stat entirely (readdir-
+		// only — the whole point of 0.7.0). `size`/`mtime` stay undefined; nothing
+		// on a poster-off feed reads them. A file that vanished between readdir and
+		// serve just 404s at the media endpoint (the manifest is advisory).
+		if (!cheap) {
+			let st;
+			try {
+				st = await fsp.stat(path.join(videoDir, name));
+			} catch {
+				continue;
+			}
+			item.size = st.size;
+			item.mtime = st.mtimeMs;
+		}
+		items.push(item);
 	}
 
-	items.sort((a, b) => b.mtime - a.mtime);
+	// Name-asc: a stable, deterministic total order over unique filenames so SSR +
+	// /api/feed seeded-shuffle paging stay coherent without mtime. Code-unit compare
+	// (not localeCompare) so it's environment-independent. The UI always shuffles,
+	// so this base order is never user-visible — it only has to be stable + total.
+	items.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 	return items;
 }
 
 /**
- * Scan `videoDir` for playable videos → manifest items, mtime-desc.
- * Filters by extension and (when `ignoreHidden`) skips dotfiles/`.partial`.
- * Cached in-process and invalidated by the directory's mtime (not a timer), so a
- * stable directory scans once; concurrent requests share one scan (single-flight).
+ * Scan `videoDir` → manifest items (name-asc), updating the in-process cache.
+ * This is the BACKGROUND revalidate worker (and the test seam): it blocks on the
+ * scan and returns the items. Request handlers must use `getFeed()` instead (which
+ * never awaits a CIFS scan). Single-flight: concurrent callers share one scan; a
+ * stable directory (unchanged mtime) reuses the cache without re-walking.
+ * `cheap` defaults to "poster feature off" (DATA_DIR unset) — the readdir-only path.
  */
 export async function scanVideos(
 	videoDir: string = config.videoDir,
-	ignoreHidden: boolean = config.ignoreHidden
+	ignoreHidden: boolean = config.ignoreHidden,
+	cheap: boolean = config.dataDir === ''
 ): Promise<FeedItem[]> {
 	const key = `${videoDir} ${ignoreHidden}`;
 
@@ -137,10 +176,11 @@ export async function scanVideos(
 	const promise = (async () => {
 		const mtime = await dirMtimeMs(videoDir);
 		if (scanCache && scanCache.key === key && scanCache.dirMtimeMs === mtime) {
+			scanCache.checkedAt = Date.now();
 			return scanCache.items;
 		}
-		const items = await doScan(videoDir, ignoreHidden);
-		scanCache = { key, dirMtimeMs: mtime, items };
+		const items = await doScan(videoDir, ignoreHidden, cheap);
+		scanCache = { key, items, dirMtimeMs: mtime, checkedAt: Date.now() };
 		return items;
 	})();
 
@@ -150,6 +190,56 @@ export async function scanVideos(
 		if (inflight?.promise === promise) inflight = null;
 	});
 	return promise;
+}
+
+// ---------------------------------------------------------------------------
+// Serve-stale-while-revalidate request path (0.7.0)
+// ---------------------------------------------------------------------------
+
+/** What the request path gets back from `getFeed()`. */
+export interface FeedResult {
+	items: FeedItem[];
+	/** True only when there is NO manifest yet (fresh/restarted container, first
+	 *  request before the first background scan lands). The client shows a brief
+	 *  warming state and polls; never a blocking scan. */
+	warming: boolean;
+}
+
+/** Kick a background revalidate if due — never awaited, never throws into the
+ *  request. Cold (no manifest for this key) → always schedule (single-flight in
+ *  scanVideos dedups the concurrent cold-start polls); warm → throttled to once
+ *  per REVALIDATE_INTERVAL_MS. */
+function scheduleRevalidate(videoDir: string, ignoreHidden: boolean, cheap: boolean): void {
+	const key = `${videoDir} ${ignoreHidden}`;
+	const warm = scanCache !== null && scanCache.key === key;
+	if (warm && Date.now() - scanCache!.checkedAt < REVALIDATE_INTERVAL_MS) return;
+	// Mark the throttle window NOW (before the await suspends) so concurrent requests
+	// in the same tick don't each schedule; scanVideos' single-flight is the backstop.
+	if (warm) scanCache!.checkedAt = Date.now();
+	void scanVideos(videoDir, ignoreHidden, cheap).catch(() => {
+		/* a failed background scan keeps the last-known-good manifest; getFeed never
+		   rejects and the next due request retries. */
+	});
+}
+
+/**
+ * Serve-stale-while-revalidate feed read for the REQUEST path. Returns the
+ * last-known-good manifest from memory INSTANTLY (zero CIFS I/O) and schedules a
+ * background revalidate when due. With no manifest yet, returns empty +
+ * `warming:true`. `/api/feed` and the SSR load call this — never `scanVideos`
+ * directly (which would block on the CIFS scan).
+ */
+export function getFeed(
+	videoDir: string = config.videoDir,
+	ignoreHidden: boolean = config.ignoreHidden,
+	cheap: boolean = config.dataDir === ''
+): FeedResult {
+	const key = `${videoDir} ${ignoreHidden}`;
+	scheduleRevalidate(videoDir, ignoreHidden, cheap);
+	if (scanCache && scanCache.key === key) {
+		return { items: scanCache.items, warming: false };
+	}
+	return { items: [], warming: true };
 }
 
 // ---------------------------------------------------------------------------

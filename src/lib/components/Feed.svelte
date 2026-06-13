@@ -520,6 +520,30 @@
 		return `${v.toFixed(1)} ${units[i]}`;
 	}
 
+	// Lazy info-overlay size (0.7.0): the cheap (poster-off) scan omits `size` to
+	// avoid a per-file stat across the whole library. When the info card is open we
+	// fetch the size for the SINGLE active card on demand — a HEAD to the media
+	// endpoint, whose content-length IS the file size. One request, one card, only
+	// while info is open — NOT a scan. Cached per name (plain object, reassigned to
+	// stay reactive — same pattern as revealedByName). The poster feed keeps the
+	// manifest `size` (full stat), so this never fires there.
+	let sizeByName = $state<Record<string, number>>({});
+	async function ensureInfoSize(item: FeedItem | undefined) {
+		if (!item || item.size != null || sizeByName[item.name] != null) return;
+		try {
+			const res = await fetch(item.url, { method: 'HEAD' });
+			const len = Number(res.headers.get('content-length'));
+			if (res.ok && Number.isFinite(len) && len > 0) {
+				sizeByName = { ...sizeByName, [item.name]: len };
+			}
+		} catch {
+			/* offline / transient — the overlay just omits the size segment */
+		}
+	}
+	$effect(() => {
+		if (infoOpen) ensureInfoSize(activeItem);
+	});
+
 	function hide(name: string | undefined) {
 		if (!name) return;
 		hidden.add(name);
@@ -984,12 +1008,15 @@
 		onhide={() => hide(activeItem?.name)}
 	/>
 	{#if infoOpen && activeItem}
+		{@const infoSize = activeItem.size ?? sizeByName[activeItem.name]}
 		<div class="info-overlay">
 			<button class="info-name" onclick={() => copyId(activeItem.name)} title="Copy ID">
 				<span class="info-id">{activeItem.name}</span>
 				<Copy size={13} aria-hidden="true" />
 			</button>
-			<p class="info-meta">{formatBytes(activeItem.size)} · {activeItem.type}</p>
+			<p class="info-meta">
+				{infoSize != null ? `${formatBytes(infoSize)} · ` : ''}{activeItem.type}
+			</p>
 		</div>
 	{/if}
 {/if}
