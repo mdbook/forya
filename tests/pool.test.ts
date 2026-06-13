@@ -102,4 +102,16 @@ describe('reassignPool (preserve covered bindings, recycle the rest)', () => {
 		expect(new Set(nonNull)).toEqual(new Set([0, 1]));
 		expect(next.filter((c) => c === null).length).toBe(1);
 	});
+
+	it('generic over identity: name-keyed keep/recycle (prev [A,B,C] → targets [B,C,D])', () => {
+		// 0.6.2 #1: the pool now keys slot→NAME, not slot→index. reassignPool is generic and
+		// identity-agnostic (pure Set-membership + equality), so the same keep/recycle holds
+		// for string keys — B and C stay on their slots, A's slot recycles to the newly-covered
+		// D. (Hide/undo re-indexes `visible`, but a clip's NAME is stable, so its slot binding
+		// survives the reorder — the whole point of the re-key.)
+		const next = reassignPool(['A', 'B', 'C'], ['B', 'C', 'D'], 3);
+		expect(next[1]).toBe('B'); // kept in place
+		expect(next[2]).toBe('C'); // kept in place
+		expect(next[0]).toBe('D'); // slot that held A recycles to D
+	});
 });
