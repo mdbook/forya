@@ -4,6 +4,19 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.5.2 — tap-to-copy clip ID (debugging aid)
+
+A small operator-requested hotfix to unblock cataloguing which clips still
+mis-autoplay: the info panel's clip ID is now tap-to-copy. Frontend only; the
+serving layer is byte-untouched.
+
+### Added
+
+- **Copy clip ID:** tapping the ID in the info panel copies the `/api/media`
+  filename via `navigator.clipboard` (works on iOS Safari over HTTPS) with a
+  brief "Copied ID ✓" toast. If the clipboard API is unavailable/blocked the ID
+  is `user-select:text`, so a long-press → Copy still works.
+
 ## 0.5.1 — autoplay self-heal + worker key cleanup
 
 Fixes two pre-existing (0.4.x) iOS autoplay residuals the operator hit on-device:
