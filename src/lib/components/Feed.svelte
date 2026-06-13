@@ -110,6 +110,12 @@
 	let autoAdvance = $state(false);
 	const visible = $derived(applyHidden(allItems, hidden));
 	const activeItem = $derived(visible[activeIndex]);
+	// O(1) name→item for syncPool's recycle loop + the viewportAR re-fit, which translate a
+	// name-keyed slot back to its FeedItem (0.6.2 #1). Plain object (not a Map) to satisfy
+	// svelte/prefer-svelte-reactivity; names are unique filenames (loadMore dedupes by name).
+	const itemByName: Record<string, FeedItem> = $derived(
+		Object.fromEntries(visible.map((i): [string, FeedItem] => [i.name, i]))
+	);
 
 	// ── Pooled <video> machine (0.6) ──────────────────────────────────────────────
 	// POOL_SIZE persistent elements, reparented onto the covered cards. Bump to 5 (±2) if
@@ -123,15 +129,20 @@
 	// session: every pool element is blessed once and the per-element grant survives src-swaps,
 	// so no element is ever unblessed again. Plain (non-reactive) — read only imperatively.
 	let blessed = false;
-	let slotToCard: (number | null)[] = new Array(POOL_SIZE).fill(null); // pool slot → card idx
+	// pool slot → the item NAME it shows (0.6.2 #1: was index-keyed; re-keyed to the stable
+	// clip name so a hide/undo re-index of `visible` can't strand a kept slot under a stale
+	// index — mirrors cardSlotByName, which was already name-keyed and correct).
+	let slotToName: (string | null)[] = new Array(POOL_SIZE).fill(null);
 	// Shell slot divs keyed by the STABLE item name (not index): `use:` actions fire only
 	// on mount/destroy, so a hide/undo or lazy-append that shifts indices must not strand a
 	// kept card's slot under a stale index. The card node persists across reorders (keyed
 	// each-block), so name→node is stable.
 	let cardSlotByName = $state<Record<string, HTMLElement>>({});
-	// Reactive surface for the shells: which card indices have a painted (revealed) video,
+	// Reactive surface for the shells: which clip NAMES have a painted (revealed) video,
 	// and the active card's live playback state (single source of truth — review #433).
-	let cardRevealed = $state<Record<number, boolean>>({});
+	// (0.6.2 #1: name-keyed so a recycled slot's fresh clip is never painted as already-
+	// revealed, and reveal follows the clip across a hide/undo re-index.)
+	let revealedByName = $state<Record<string, boolean>>({});
 	let activeBuffering = $state(false);
 	let activeBlocked = $state(false);
 	let activePaused = $state(false);
@@ -139,11 +150,13 @@
 	let activeDuration = $state(0);
 	// Monotonic token cancelling stale async play retries on the active element.
 	let playGen = 0;
-	// The card index driveActive last STARTED (reset to t=0). Tracks fresh arrivals so a clip
+	// The clip NAME driveActive last STARTED (reset to t=0). Tracks fresh arrivals so a clip
 	// restarts from the top when you land on it (TikTok-style) instead of resuming the muted
 	// off-screen pre-roll the post-bless neighbour accumulated — without re-seeking on every
-	// syncPool (slot re-registration etc.) for a card that's already the active one.
-	let lastDrivenActive = -1;
+	// syncPool (slot re-registration etc.) for a card that's already the active one. (0.6.2
+	// #1: name-keyed so a hide/undo re-index that leaves the SAME clip active doesn't
+	// false-trigger a t=0 restart — fresh ⇔ a genuinely new clip became active.)
+	let lastDrivenName: string | null = null;
 	// Consecutive auto-advance error-skips (review #3c). Reset on any successful play
 	// (onActivePlaying), so isolated broken clips skip but a feed of all-404s can't scroll-
 	// loop: after MAX_ERROR_SKIPS in a row with no success we stop and leave the card blocked
@@ -151,11 +164,22 @@
 	let errorSkips = 0;
 	const MAX_ERROR_SKIPS = 3;
 
-	function slotForCard(card: number): number {
-		return slotToCard.indexOf(card);
+	function slotForName(name: string): number {
+		return slotToName.indexOf(name);
+	}
+	// The pool slot showing the ACTIVE card's clip, resolved by identity (name), not index
+	// (0.6.2 #1). `activeIndex` stays the positional IO anchor; its clip identity is
+	// `activeItem.name`, and THIS maps that name → the physical slot. Returns -1 when the
+	// active clip isn't currently pooled (a transient before syncPool settles after a
+	// re-index). Replaces all 10 former `slotForCard(activeIndex)` call-sites — including the
+	// cure-critical bless flip (blessPool), so a hide/undo re-index can never mis-target which
+	// element stays unmuted.
+	function activeSlot(): number {
+		const n = activeItem?.name;
+		return n ? slotForName(n) : -1;
 	}
 	function activeVideo(): HTMLVideoElement | null {
-		const s = slotForCard(activeIndex);
+		const s = activeSlot();
 		return s >= 0 ? pool[s] : null;
 	}
 
@@ -180,7 +204,7 @@
 	const PREWARM_BYTES = 1024 * 1024; // first 1 MB
 	// url → fetch kicked off (dedupe; the HTTP cache is the target). Plain object, NOT a
 	// SvelteSet: deliberately non-reactive, read only imperatively from prewarm() under the
-	// syncPool untrack (same philosophy as the plain `pool`/`slotToCard`).
+	// syncPool untrack (same philosophy as the plain `pool`/`slotToName`).
 	const prewarmed: Record<string, true> = {};
 	// In-flight prewarm AbortControllers (review #5d) — lets a fast flick cancel a superseded
 	// prewarm so its 1 MB fetch can't hog the connection ahead of the new active card's own
@@ -286,9 +310,10 @@
 		activeBlocked = false;
 		errorSkips = 0; // a successful play breaks any auto-advance error-skip chain (#3c)
 		const v = activeVideo();
-		if (v) {
+		const aName = activeItem?.name;
+		if (v && aName) {
 			v.classList.add('revealed');
-			cardRevealed = { ...cardRevealed, [activeIndex]: true };
+			revealedByName = { ...revealedByName, [aName]: true };
 		}
 		assertActiveAudio();
 	}
@@ -297,7 +322,7 @@
 	// only touch the reactive active-state when THIS slot is the active one, so a
 	// neighbour's events can't clobber the active card's UI.
 	function onPoolPlaying(slot: number) {
-		if (slot === slotForCard(activeIndex)) {
+		if (slot === activeSlot()) {
 			activeBuffering = false;
 			onActivePlaying();
 		} else {
@@ -311,7 +336,7 @@
 		}
 	}
 	function onPoolError(slot: number) {
-		if (slot === slotForCard(activeIndex)) {
+		if (slot === activeSlot()) {
 			activeBuffering = false;
 			activeBlocked = true;
 			pushDebug(activeIndex, 'error', pool[slot]?.error ? `code${pool[slot]!.error!.code}` : 'err');
@@ -334,36 +359,42 @@
 		if (!pool.length) return;
 		const totalCards = visible.length;
 		if (totalCards === 0) return;
-		const targets = coverage(activeIndex, POOL_SIZE, totalCards);
-		const next = reassignPool(slotToCard, targets, POOL_SIZE);
-		// Cancel prewarm fetches for cards no longer in the new coverage window (#5d).
+		// Coverage is positional (an index window); translate to clip IDENTITY at THIS boundary
+		// so the pool keeps/recycles by NAME — a hide/undo re-index of `visible` then can't
+		// strand a kept clip's slot under a stale index. coverage() returns in-range indices, so
+		// visible[i] is always defined here.
+		const targetIdx = coverage(activeIndex, POOL_SIZE, totalCards);
+		const targetNames = targetIdx.map((i) => visible[i].name);
+		const next = reassignPool(slotToName, targetNames, POOL_SIZE);
+		// Cancel prewarm fetches for clips no longer in the new coverage window (#5d).
 		const wantedUrls: string[] = [];
 		for (let s = 0; s < POOL_SIZE; s++) {
-			const c = next[s];
-			if (c !== null && visible[c]) wantedUrls.push(visible[c].url);
+			const name = next[s];
+			const item = name ? itemByName[name] : null;
+			if (item) wantedUrls.push(item.url);
 		}
 		cancelStalePrewarms(wantedUrls);
 		for (let s = 0; s < POOL_SIZE; s++) {
 			const v = pool[s];
-			const card = next[s];
-			const prevCard = slotToCard[s];
-			if (card === null) {
-				if (prevCard !== null) {
+			const name = next[s];
+			const prevName = slotToName[s];
+			if (name === null) {
+				if (prevName !== null) {
 					v.pause();
 					v.removeAttribute('src');
 					v.load();
 				}
 				continue;
 			}
-			const item = visible[card];
+			const item = itemByName[name];
 			if (!item) continue;
-			if (card !== prevCard) {
-				// Recycle this element onto a new card: reset reveal, swap src. The element
+			if (name !== prevName) {
+				// Recycle this element onto a new clip: reset reveal, swap src. The element
 				// stays blessed (per-element, durable) across this swap — that's the point.
-				if (prevCard !== null && cardRevealed[prevCard]) {
-					const rest = { ...cardRevealed };
-					delete rest[prevCard];
-					cardRevealed = rest;
+				if (prevName !== null && revealedByName[prevName]) {
+					const rest = { ...revealedByName };
+					delete rest[prevName];
+					revealedByName = rest;
 				}
 				v.classList.remove('revealed');
 				v.loop = !autoAdvance;
@@ -376,7 +407,7 @@
 				// unmutes it once playing. Either way the per-element blessing survives the swap
 				// (harness A).
 				v.muted = true;
-				// Warm this card's first bytes into the HTTP cache as it enters the coverage
+				// Warm this clip's first bytes into the HTTP cache as it enters the coverage
 				// window (active±1), so its load()/play() is ready within the first tap (M2.4).
 				prewarm(item.url);
 			}
@@ -384,12 +415,12 @@
 			const slotDiv = cardSlotByName[item.name] ?? null;
 			if (slotDiv && v.parentNode !== slotDiv) slotDiv.appendChild(v);
 		}
-		slotToCard = next;
+		slotToName = next;
 		driveActive();
 	}
 
 	function driveActive() {
-		const aSlot = slotForCard(activeIndex);
+		const aSlot = activeSlot();
 		for (let s = 0; s < pool.length; s++) {
 			if (s === aSlot) continue;
 			const v = pool[s];
@@ -405,15 +436,18 @@
 		}
 		if (aSlot < 0) return;
 		const v = pool[aSlot];
-		// Fresh arrival (genuine active-card CHANGE, not a re-park from slot re-registration /
-		// feed growth — which must never re-seek/re-load a card that's already active).
-		const fresh = activeIndex !== lastDrivenActive;
+		// Fresh arrival (genuine active-CLIP change, not a re-park from slot re-registration /
+		// feed growth / a hide-reorder that left the SAME clip active — which must never
+		// re-seek/re-load a clip that's already active). Keyed by NAME (0.6.2 #1) so a re-index
+		// can't false-trigger a t=0 restart — fresh ⇔ a genuinely new clip became active.
+		const aName = activeItem?.name;
+		const fresh = aName !== lastDrivenName;
 		if (fresh) {
 			// Restart the clip from the top. The active el may have been a neighbour pre-rolling
 			// muted off-screen (~Xs in), so without this it would resume mid-clip (the skip-ahead
 			// the operator saw, worse under auto-advance's faster cadence).
 			v.currentTime = 0;
-			lastDrivenActive = activeIndex;
+			lastDrivenName = aName ?? null;
 		}
 		activeDuration = v.duration || 0;
 		activeCurrentTime = v.currentTime || 0;
@@ -543,6 +577,24 @@
 		}
 	}
 
+	// ── #3b foreground re-drive (0.6.2) ─────────────────────────────────────────────
+	// iOS pauses inline <video> when the tab/app backgrounds; on return nothing re-drives the
+	// pool, so a becoming-active card can land on a silently-PAUSED element — the exact pause→
+	// play transition the continuously-playing pool exists to avoid. Re-drive by REUSING
+	// driveActive() (no new play path): neighbours resume muted (v.paused→play()), the active
+	// card resumes via tryPlayActive. activeIndex is unchanged so fresh=false → NO t=0 restart
+	// (the user keeps their place). Cure-shape intact: all driveActive plays are muted, and
+	// onActivePlaying→assertActiveAudio's unmute is the D-safe toggle on an already-playing
+	// blessed element, NOT an ungestured play() — guarantee-safe whether or not the per-element
+	// bless survived backgrounding (the audio-after-background outcome is empirical, read off
+	// the overlay on-device; the muted-only fallback is one branch away if iOS revokes it).
+	// Guarded against an empty pool/feed; idempotent (coarse event, no debounce needed).
+	function onForeground() {
+		if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+		if (!pool.length || visible.length === 0) return;
+		driveActive();
+	}
+
 	function prefersReducedMotion(): boolean {
 		return (
 			typeof window !== 'undefined' &&
@@ -593,7 +645,7 @@
 		blessed = true;
 		activePaused = false;
 		activeBlocked = false;
-		const aSlot = slotForCard(activeIndex);
+		const aSlot = activeSlot();
 		// Gesture-liveness at the moment of the bless (DEBUG probe #3, two-tap-investigation.md);
 		// surfaced as `ua=` in the overlay. If a FAILING tap ever shows ua=0, an async gap upstream
 		// burned the transient user-activation and we'd remove it; always ua=1 rules that out.
@@ -743,28 +795,28 @@
 			v.className = 'pool-video';
 			v.addEventListener('playing', () => onPoolPlaying(s));
 			v.addEventListener('waiting', () => {
-				if (s === slotForCard(activeIndex)) activeBuffering = true;
+				if (s === activeSlot()) activeBuffering = true;
 			});
 			v.addEventListener('timeupdate', () => {
-				if (s === slotForCard(activeIndex)) activeCurrentTime = v.currentTime;
+				if (s === activeSlot()) activeCurrentTime = v.currentTime;
 			});
 			v.addEventListener('loadedmetadata', () => {
-				if (s === slotForCard(activeIndex)) activeDuration = v.duration || 0;
+				if (s === activeSlot()) activeDuration = v.duration || 0;
 			});
 			v.addEventListener('canplay', () => {
 				if (
-					s === slotForCard(activeIndex) &&
+					s === activeSlot() &&
 					shouldRetryOnPlayable({
 						active: true,
 						paused: activePaused,
-						hasPlayed: cardRevealed[activeIndex] ?? false,
+						hasPlayed: activeItem ? (revealedByName[activeItem.name] ?? false) : false,
 						errored: false
 					})
 				)
 					tryPlayActive(v);
 			});
 			v.addEventListener('ended', () => {
-				if (s === slotForCard(activeIndex) && autoAdvance) scrollTo(activeIndex + 1);
+				if (s === activeSlot() && autoAdvance) scrollTo(activeIndex + 1);
 			});
 			v.addEventListener('error', () => onPoolError(s));
 			pool.push(v);
@@ -794,6 +846,12 @@
 		feedEl?.addEventListener('touchmove', onTouchMove, { passive: true });
 		feedEl?.addEventListener('touchend', onTouchEnd, { passive: true });
 
+		// #3b — re-drive the pool when the tab/app returns to the foreground. iOS pauses inline
+		// <video> on background; visibilitychange covers tab-switch/lock, pageshow covers iOS
+		// bfcache (back-forward) restore (which visibilitychange may not fire for).
+		document.addEventListener('visibilitychange', onForeground);
+		window.addEventListener('pageshow', onForeground);
+
 		if (settings.debugPlayback) {
 			sampleDebug();
 			debugTimer = setInterval(sampleDebug, 500);
@@ -804,6 +862,8 @@
 			feedEl?.removeEventListener('touchstart', onTouchStart);
 			feedEl?.removeEventListener('touchmove', onTouchMove);
 			feedEl?.removeEventListener('touchend', onTouchEnd);
+			document.removeEventListener('visibilitychange', onForeground);
+			window.removeEventListener('pageshow', onForeground);
 			clearTimeout(undoTimer);
 			clearTimeout(modeTimer);
 			clearTimeout(copyTimer);
@@ -828,12 +888,15 @@
 	});
 
 	// THE pool driver: reassign + reparent + play whenever the active index moves, the feed
-	// grows, or a shell slot (re)registers. Reads those reactive deps; everything it mutates
-	// (slotToCard is plain; cardRevealed/active* are state set imperatively) is kept off the
-	// dependency set via untrack so this can't self-loop.
+	// changes (hide/undo/append/reorder), or a shell slot (re)registers. Reads those reactive
+	// deps; everything it mutates (slotToName is plain; revealedByName/active* are state set
+	// imperatively) is kept off the dependency set via untrack so this can't self-loop.
+	// Depends on `visible` (the derived array identity, which changes on ANY hide/undo/append/
+	// reorder) rather than `visible.length` — closes a same-length-reorder gap; syncPool is
+	// idempotent so the extra runs are harmless (0.6.2 #1).
 	$effect(() => {
 		void activeIndex;
-		void visible.length;
+		void visible;
 		void cardSlotByName;
 		untrack(() => syncPool());
 	});
@@ -846,8 +909,9 @@
 		void viewportAR;
 		untrack(() => {
 			for (let s = 0; s < pool.length; s++) {
-				const card = slotToCard[s];
-				if (card !== null && visible[card]) applyFit(pool[s], visible[card]);
+				const name = slotToName[s];
+				const item = name ? itemByName[name] : null;
+				if (item) applyFit(pool[s], item);
 			}
 		});
 	});
@@ -889,7 +953,7 @@
 						active={i === activeIndex}
 						{viewportAR}
 						posters={settings.posters}
-						revealed={cardRevealed[i] ?? false}
+						revealed={revealedByName[item.name] ?? false}
 						buffering={i === activeIndex && activeBuffering}
 						blocked={i === activeIndex && activeBlocked}
 						paused={i === activeIndex && activePaused}

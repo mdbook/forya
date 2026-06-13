@@ -165,7 +165,7 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
-## 0.6.0 / 0.6.1 — pooled `<video>` + sound-on carry + first-card two-tap fix (the CURRENT play machine; supersedes the per-card model below)
+## 0.6.0 / 0.6.1 / 0.6.2 — pooled `<video>` + sound-on carry + first-card two-tap fix + identity-keyed slots (the CURRENT play machine; supersedes the per-card model below)
 
 **What changed.** `Feed.svelte` no longer mounts one `<video>` per card. It owns a
 small fixed **pool** of persistent `<video>` elements (`POOL_SIZE = 3` =
@@ -229,6 +229,33 @@ links). Safari reuses the partial for the `<video>`'s own range requests (overla
 `rs` climbs before tap). Superseded prewarms are aborted on a fast flick so they
 can't queue ahead of the active card's own load. A `fetch()` is **not** a `play()`,
 so the cure-shape is untouched — and it's deduped per-url, never the serving-four.
+
+**0.6.2 — slots keyed by clip IDENTITY, not index.** The pool's three persistent
+maps (slot→clip, reveal flags, fresh-arrival tracking) were keyed by **visible
+index**; on a hide/undo the `visible` list re-indexes, so a kept element could
+strand under a stale index (wrong clip in the cell, stale reveal, a promoted clip
+not restarted to `t=0`). They're now keyed by the **stable clip name** —
+`slotToName` / `revealedByName` / `lastDrivenName`, mirroring `cardSlotByName` (the
+slot-`<div>` map, which was always name-keyed). `coverage()` and `activeIndex` stay
+**positional** (the IO drives `activeIndex` off `data-index`); the index→name
+translation happens once at the `syncPool` boundary, and `activeSlot()` (active clip
+→ its physical slot, by name) replaces every former `slotForCard(activeIndex)`
+lookup — **including the cure-critical bless flip in `blessPool`**, where a mis-keyed
+slot would unmute the wrong element. `reassignPool` is generic over the key type (the
+recycle math is identity-agnostic; the index-keyed tests still hold). Hide is
+**active-card-only** (the single global ActionRail button targets `activeItem`;
+there's no off-screen-card hide gesture), so the only reachable re-index is hiding
+the active card — exactly the case this fixes (device-verified on the ALLOW_HIDE
+feeds).
+
+**0.6.2 — foreground re-drive (`onForeground`).** iOS pauses inline `<video>` on
+background; on return, `visibilitychange` (visible) + `pageshow` (iOS bfcache) re-
+drive the pool via the existing `driveActive()` — **no new play path**. `activeIndex`
+is unchanged so `fresh=false` → no `t=0` restart (you keep your spot); audio resumes
+on focus (the D-safe off-gesture unmute on the already-playing blessed element — the
+muted-only fallback is one branch away if a future iOS revokes the bless on
+background, but on-device the grant survived). All drive plays stay muted; cure-shape
+intact.
 
 **What the pool supersedes in the sections below.** The per-card cascade guards,
 readiness-gated `feedWindow` preload, `VideoCard.onDestroy` decoder release, and the

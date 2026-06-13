@@ -41,23 +41,21 @@ export function coverage(activeIndex: number, n: number, total: number): number[
 	return out;
 }
 
-/** Reassign `n` physical slots to cover `targetCards`, PRESERVING a slot's current card
- *  binding when that card stays covered (so we don't needlessly `src`-swap / reparent /
- *  reload an element that's already showing the right clip), and recycling the freed slots
- *  to the newly-covered cards. Pure: takes the previous slot→card map, returns the new one.
+/** Reassign `n` physical slots to cover `targetCards`, PRESERVING a slot's current binding
+ *  when that target stays covered (so we don't needlessly `src`-swap / reparent / reload an
+ *  element that's already showing the right clip), and recycling the freed slots to the
+ *  newly-covered targets. Pure: takes the previous slot→target map, returns the new one.
  *
- *  `prev[s]` = the card index slot `s` currently shows, or null if unused. The returned
- *  array has length `n`; entries are card indices or null (null only when `targetCards` has
- *  fewer than `n` entries, i.e. `total < n`). Slots whose card leaves coverage are the ones
- *  Feed will `src`-swap to a new card. */
-export function reassignPool(
-	prev: (number | null)[],
-	targetCards: number[],
-	n: number
-): (number | null)[] {
-	const next: (number | null)[] = new Array(n).fill(null);
+ *  Generic over the target key `T` (0.6.2 #1): the logic is pure Set-membership + equality,
+ *  so it's identity-agnostic — Feed keys the pool by clip NAME (string) now, but the math is
+ *  unchanged and the original number-keyed (index) tests still hold. `prev[s]` = the target
+ *  slot `s` currently shows, or null if unused. The returned array has length `n`; entries
+ *  are targets or null (null only when `targetCards` has fewer than `n` entries, i.e.
+ *  `total < n`). Slots whose target leaves coverage are the ones Feed will `src`-swap. */
+export function reassignPool<T>(prev: (T | null)[], targetCards: T[], n: number): (T | null)[] {
+	const next: (T | null)[] = new Array(n).fill(null);
 	const targets = new Set(targetCards);
-	const claimed = new Set<number>(); // card indices already kept by some slot
+	const claimed = new Set<T>(); // targets already kept by some slot
 
 	// Pass 1: keep slots that already show a still-covered card (no reload).
 	for (let s = 0; s < n; s++) {

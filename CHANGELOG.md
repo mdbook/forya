@@ -4,6 +4,47 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.6.2 — pool keyed by clip identity (hide/undo correctness) + foreground re-drive
+
+Two correctness fixes on the pooled-`<video>` play machine, both client-only.
+
+**Hide/undo now rebinds to the right clip.** The pool's slot→clip binding, reveal
+state, and fresh-arrival tracking were keyed by **visible index**. Hiding or
+un-hiding a card re-indexes the visible list, so those index-keyed maps could point
+a pooled element at the wrong clip (wrong video in the cell, a fresh clip painted as
+already-revealed, or a promoted clip not restarted to `t=0`). They're now keyed by
+the **stable clip name** (mirroring the slot-`<div>` map, which was already
+name-keyed): a slot follows its clip across a re-index. Coverage stays positional
+(an index window around the active card, IntersectionObserver-driven); the
+index→name translation happens once, at the pool-sync boundary. Gated behind
+`ALLOW_HIDE`, so it only affects the hide-enabled feeds — verified on device (hide
+the active card → next clip slides in from the top, correct clip, clean reveal; undo
+restores the right spot).
+
+**The feed re-drives on foreground.** iOS pauses inline `<video>` when the tab or app
+backgrounds; on return nothing re-started the pool, so a becoming-active card could
+land on a silently-paused element. Returning to the foreground (`visibilitychange` /
+`pageshow`) now re-drives the pool, resuming playback **in place** (no restart — you
+keep your spot); if sound was on, it resumes audible.
+
+The always-muted cure and the 0.6.1 in-gesture bless model are **untouched** — this
+is bookkeeping (which slot shows which clip), not a change to the play/mute logic. No
+`<video>` ever does an ungestured unmuted `play()`.
+
+### Changed
+
+- **Pool slots, reveal flags, and fresh-tracking are keyed by clip name, not visible
+  index** (`slotToName` / `revealedByName` / `lastDrivenName`). `coverage()` stays
+  index-based (positional); `reassignPool` is now generic over the key type.
+- **The pool re-syncs on any change to the visible list** (hide/undo/append/reorder),
+  not just a length change.
+
+### Added
+
+- **Foreground re-drive** — `visibilitychange` + `pageshow` listeners re-drive the
+  pool when the tab/app returns to the foreground, reusing the existing drive path
+  (no new playback path). Audio resumes on focus.
+
 ## 0.6.1 — first-card two-tap fix (muted-autoplay + in-gesture unmute)
 
 The 0.6.0 first card sometimes needed **two taps** to start with sound. Unmuting a
