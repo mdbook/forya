@@ -692,7 +692,8 @@
 						active: true,
 						paused: activePaused,
 						hasPlayed: cardRevealed[activeIndex] ?? false,
-						errored: false
+						errored: false,
+						blessed
 					})
 				)
 					tryPlayActive(v);

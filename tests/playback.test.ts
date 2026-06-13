@@ -11,7 +11,7 @@ import {
 	shouldRetryOnPlayable
 } from '../src/lib/playback';
 
-const base = { active: true, paused: false, hasPlayed: false, errored: false };
+const base = { active: true, paused: false, hasPlayed: false, errored: false, blessed: true };
 
 describe('shouldRetryOnPlayable', () => {
 	it('retries an active, fresh, un-paused, un-errored card (the recovery case)', () => {
@@ -34,9 +34,19 @@ describe('shouldRetryOnPlayable', () => {
 		expect(shouldRetryOnPlayable({ ...base, errored: true })).toBe(false);
 	});
 
+	it('does NOT retry before the pool is blessed (0.6 start-paused — the self-heal is a post-bless recovery; muted-autoplaying the active card pre-bless causes the first-bless-pause / two-tap)', () => {
+		expect(shouldRetryOnPlayable({ ...base, blessed: false })).toBe(false);
+	});
+
 	it('requires ALL conditions — any single disqualifier blocks the retry', () => {
 		expect(
-			shouldRetryOnPlayable({ active: false, paused: true, hasPlayed: true, errored: true })
+			shouldRetryOnPlayable({
+				active: false,
+				paused: true,
+				hasPlayed: true,
+				errored: true,
+				blessed: false
+			})
 		).toBe(false);
 	});
 });
