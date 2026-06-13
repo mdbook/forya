@@ -168,12 +168,19 @@
 	// `rs=` (active el readyState): rs≥3 before tap-1 = prewarm works; stuck 0–1 on a cold
 	// card = Safari isn't reusing it and we escalate the lever.
 	const PREWARM_BYTES = 1024 * 1024; // first 1 MB
+	// A/B SHIP-CONFIG TOGGLE (0.6.0, bus #517) — single-flag, not a revert. Flip `true` to
+	// re-enable the M2.4 cache prewarm. Disabled now for the prewarm-off A/B: with prewarm
+	// off the cold first card reaches tap-time with `rs` still low (watch the overlay). The
+	// inverted hypothesis (#514) is rs=0-at-tap → reliable ONE tap; rs≥3 → two. If one-tap
+	// returns with this off, prewarm is net-counterproductive for one-tap → SHIP WITHOUT it.
+	// If no change → confirmed iOS wall → set back `true`, ship as-is, two-tap → 0.6.1.
+	const PREWARM_ENABLED = false;
 	// url → fetch kicked off (dedupe; the HTTP cache is the target). Plain object, NOT a
 	// SvelteSet: deliberately non-reactive, read only imperatively from prewarm() under the
 	// syncPool untrack (same philosophy as the plain `pool`/`slotToCard`).
 	const prewarmed: Record<string, true> = {};
 	function prewarm(url: string) {
-		if (typeof fetch === 'undefined' || prewarmed[url]) return;
+		if (!PREWARM_ENABLED || typeof fetch === 'undefined' || prewarmed[url]) return;
 		prewarmed[url] = true;
 		// Range-capped at 1 MB so we never pull the whole file; same endpoint + 206 path the
 		// <video> uses (server Range support is the reason this app exists — guarded by
