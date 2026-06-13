@@ -327,12 +327,13 @@
 		}
 		if (aSlot < 0) return;
 		const v = pool[aSlot];
-		// Fresh arrival: restart the clip from the top. Post-bless the active el may have been a
-		// neighbour pre-rolling muted off-screen (~Xs in), so without this it would resume
-		// mid-clip (the skip-ahead the operator saw, worse under auto-advance's faster cadence).
-		// Guarded on a genuine active-card CHANGE so re-running syncPool (slot re-registration,
-		// feed growth) never re-seeks a card that's already active (would interrupt playback).
-		if (activeIndex !== lastDrivenActive) {
+		// Fresh arrival (genuine active-card CHANGE, not a re-park from slot re-registration /
+		// feed growth — which must never re-seek/re-load a card that's already active).
+		const fresh = activeIndex !== lastDrivenActive;
+		if (fresh) {
+			// Restart the clip from the top. Post-bless the active el may have been a neighbour
+			// pre-rolling muted off-screen (~Xs in), so without this it would resume mid-clip (the
+			// skip-ahead the operator saw, worse under auto-advance's faster cadence).
 			v.currentTime = 0;
 			lastDrivenActive = activeIndex;
 		}
@@ -346,6 +347,14 @@
 			// and unmuting on the tap is what paused the first card — the first-bless-pause.)
 			v.pause();
 			activePaused = true;
+			// WARM the buffer so that first tap plays in ONE tap. iOS throttles preload=auto for
+			// PAUSED elements, so without this the start-paused active card is cold → tap-1 only
+			// kicks the load, tap-2 plays (the double-tap, #480). v.load() starts buffering
+			// WITHOUT playing — gesture-free, audio-free, trips neither the play-gate nor the
+			// audible-gate, so the cure-shape (no ungestured play()) is intact (review #481); it
+			// also makes canplay fire, so the post-bless self-heal can auto-play any residual
+			// cold tap-1 without a second tap. Only on a fresh active card (not every re-park).
+			if (fresh) v.load();
 			return;
 		}
 		tryPlayActive(v);
