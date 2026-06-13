@@ -199,6 +199,30 @@ is operator-on-device, criterion 3):
   an already-buffered one gets the delayed retry. Together these fixed the two
   pre-existing 0.4.x on-device residuals (fast-scroll-settled card dark; isolated
   rejection on a conformant clip).
+- **Gesture-unlock (0.5.3) — the document-wide revocation, a THIRD axis.** On iOS a
+  single muted-`play()` rejection (~1/8 cards) revokes autoplay for the **whole
+  document**: thereafter every programmatic `play()` rejects, including all of the
+  0.5.1 self-heal — the block is **gesture-level, not buffer-level**, so retrying in
+  code is futile. The cure is a `play()` call running **synchronously inside a user
+  gesture's call stack**, which re-grants permission document-wide ("one tap unlocks
+  all"). `Feed` adds two **passive** listeners on the scroll container — `touchend`
+  (NOT `pointerup`: a scroll-fling fires `pointercancel` and stops pointer events,
+  exactly the failing case) + `click` (desktop/discrete tap) — that call
+  `activeVideo().play()` only when the active card is `blocked`
+  (`shouldGestureUnlock`, pure + tested). `VideoCard` reports its blocked state up
+  via a new `onblocked` callback (emitted only while active); `Feed` tracks
+  `activeBlocked`, **reset to false on every active-index change** so a stale
+  scrolled-past `blocked` can't mis-fire. Active-card-only by design — the in-gesture
+  `play()` re-activates the doc and the normal per-card IO autoplay resumes for all
+  following cards, so there's NO play-all-visible (which would re-introduce the
+  0.2.0 scrolled-past replay). The asymmetry the operator saw — auto-advance never
+  fails, manual scroll does — fits this exactly: programmatic auto-advance only fires
+  after a clip played to completion (a non-revoked doc by construction), while a slow
+  manual drag fires the new card's `play()` mid-drag (finger still down, outside a
+  completed gesture) into a possibly-revoked doc. Root cause of the regression: 0.4.0
+  deleted the session-scoped `playback.svelte.ts` gesture-unlock store; 0.5.3 is the
+  active-`play()` replacement (stronger than the old passive flag, which couldn't
+  re-grant iOS permission on its own).
 - **Cascade guards (0.4) — a failed autoplay must not break the NEXT card.**
   `VideoCard` has three guards, all in the play path: (1) **generation token**
   `playGen` — every attempt takes `gen = ++playGen`; the rAF retry + both
@@ -241,7 +265,13 @@ is operator-on-device, criterion 3):
   paused card (already `hasPlayed`) shows its real painted frame. This replaced
   the 0.3.0 first-frame `currentTime` nudge, which forced a seek that painted a
   black frame under memory pressure (the liked/favorite black-screen) and
-  interrupted the active card's pending `play()`.
+  interrupted the active card's pending `play()`. **As of 0.5.3 the placeholder
+  cross-fades** rather than hard-cutting: it stays mounted and fades its opacity to
+  0 over the same 0.25s the `<video>` fades in (`.placeholder.revealed`,
+  `pointer-events:none` so taps still reach the tap target), so the black `.media`
+  background never shows through for a frame on reveal. Gated purely on `hasPlayed`,
+  so an errored card (never paints) simply keeps the poster up — no stuck-poster
+  edge case.
 
 ## Future TODOs (not built in v1)
 
