@@ -295,8 +295,9 @@ is operator-on-device, criterion 3):
   all"). `Feed` adds two **passive** listeners on the scroll container — `touchend`
   (NOT `pointerup`: a scroll-fling fires `pointercancel` and stops pointer events,
   exactly the failing case) — that call `activeVideo().play()` only when the active
-  card is `blocked` AND the touch actually moved (`shouldGestureUnlock({ activeBlocked,
-moved })`, pure + tested). **0.5.4 fixed a two-tap regression here:** the original
+  card is `blocked` AND the touch actually moved (the `activeBlocked && moved` check —
+  0.6.0 inlined this into `Feed.onTouchEnd` and removed the old `shouldGestureUnlock`
+  pure helper). **0.5.4 fixed a two-tap regression here:** the original
   also keyed a container `click`, so a stationary tap fired the unlock's `play()`
   (via `touchend`) and then the synthesized `click` → `togglePlay` paused it again →
   two taps to recover. The fix gates the unlock on real scroll movement (>10px) and
