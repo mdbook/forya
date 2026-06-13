@@ -460,7 +460,17 @@
 		for (let s = 0; s < pool.length; s++) {
 			const v = pool[s];
 			if (!v.src) continue;
-			v.muted = false; // unmute IN-gesture — this is the bless (per-element, durable)
+			// pause() FIRST so the play() below is a fresh, gesture-INITIATED start that iOS
+			// authorizes for audible output. The active element has been playing via muted
+			// autoplay (gesture-free), so a bare play() on it is a no-op that never authorizes
+			// audible playback → iOS pauses it on the muted=false flip (the first-bless-pause
+			// bug: only the initial unmute on the freshly-loaded card). Neighbours are already
+			// paused pre-bless, so this pause is a no-op for them + their play() was already
+			// fresh — which is exactly why every subsequent card carried fine and only the first
+			// bless paused. Pausing then playing in the same synchronous gesture tick is seamless
+			// (no visible hitch, currentTime preserved).
+			v.pause();
+			v.muted = false; // unmute IN-gesture — the bless (per-element, durable)
 			const p = v.play();
 			if (p && typeof p.then === 'function') p.catch(() => {});
 			if (s !== aSlot) v.muted = true; // re-mute neighbours at once (no multi-audio blip)
@@ -536,8 +546,15 @@
 		const sha = settings.buildSha ? settings.buildSha.slice(0, 8) : 'local';
 		// snd = active element actually unmuted (the M2 sound-carry proof: should track the
 		// blessed sound-on state across scroll + auto-advance). bless = pool blessed this session.
+		// play = pool elements currently NOT paused — post-bless this MUST stay == POOL_SIZE, so
+		// it directly observes the harness-D precondition (neighbours continuously playing). If
+		// iOS silently pauses a neighbour under its concurrent-inline-playback cap, play< pool
+		// even while live== pool (live counts DOM-present, not playing) → the fast-flick
+		// becoming-active path could land on an actually-paused element (review #456).
 		const snd = activeVideo()?.muted === false ? 1 : 0;
-		debugCounts = `build=${sha} pool=${pool.length} live=${vids.length} data=${data} active=${activeIndex} blk=${activeBlocked ? 1 : 0} bless=${blessed ? 1 : 0} snd=${snd}`;
+		let playing = 0;
+		for (const v of pool) if (!v.paused) playing++;
+		debugCounts = `build=${sha} pool=${pool.length} live=${vids.length} play=${playing} data=${data} active=${activeIndex} blk=${activeBlocked ? 1 : 0} bless=${blessed ? 1 : 0} snd=${snd}`;
 	}
 
 	onMount(() => {
