@@ -18,28 +18,23 @@ export interface PlaybackState {
 	/** A genuine media/decode `error` fired (decoder released) — don't loop on a
 	 *  broken source; recovery there is a tap or re-activation, not `canplay`. */
 	errored: boolean;
-	/** The pool has been blessed — the user turned sound on at least once this session
-	 *  (0.6 pooled model). The `canplay` self-heal is a POST-bless recovery: pre-bless the
-	 *  active card must stay genuinely IDLE (start-paused) so the first gesture's play()
-	 *  mints iOS's per-element audible-output grant. Muted-autoplaying it pre-bless leaves
-	 *  it mid-muted-autoplay, which can't then be cleanly blessed in the gesture → the
-	 *  first-bless-pause / two-tap. A prewarm-accelerated `canplay` can land in the brief
-	 *  window where the IO callback has cleared `paused` but driveActive hasn't re-set it
-	 *  yet, so guarding on `paused` alone is racy — this gate closes it. (Pre-0.6 single-
-	 *  element builds had no bless step and are always blessed by construction.) */
-	blessed: boolean;
 }
 
 /**
  * Should an active card re-attempt `play()` now that its media reports it can
- * play? True only when the pool is blessed AND the card still wants playback and
- * nothing else (user pause, already-playing, hard error) holds it back. The
- * `blessed` gate is the cure-shape boundary (0.6): pre-bless the active card stays
- * idle for the initiating gesture, so the self-heal must never muted-autoplay it.
- * Pure — the caller still guards the actual attempt with its generation token.
+ * play? True when the card still wants playback and nothing else (user pause,
+ * already-playing, hard error) holds it back. The re-attempt is ALWAYS a MUTED
+ * play (the caller's tryPlayActive forces `muted` on a fresh/paused start), so it
+ * is cure-safe pre-bless: the 0.6.1 model muted-autoplays the active card from
+ * load (reverting 0.6.0's start-paused), and this self-heal recovers a cold card
+ * whose first muted-autoplay rejected before its buffer arrived. Audible output is
+ * gated separately — only a blessed, gesture-unmuted element is ever unmuted — so a
+ * `blessed` check here would merely suppress the muted recovery, not protect the
+ * cure (0.6.0's M2.5 gate was only needed while pre-bless was start-paused). Pure —
+ * the caller still guards the actual attempt with its generation token.
  */
 export function shouldRetryOnPlayable(s: PlaybackState): boolean {
-	return s.blessed && s.active && !s.paused && !s.hasPlayed && !s.errored;
+	return s.active && !s.paused && !s.hasPlayed && !s.errored;
 }
 
 /** `HTMLMediaElement.readyState` value: at least the current frame is decoded. */

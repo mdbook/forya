@@ -165,7 +165,7 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
-## 0.6.0 — pooled `<video>` + sound-on carry (the CURRENT play machine; supersedes the per-card model below)
+## 0.6.0 / 0.6.1 — pooled `<video>` + sound-on carry + first-card two-tap fix (the CURRENT play machine; supersedes the per-card model below)
 
 **What changed.** `Feed.svelte` no longer mounts one `<video>` per card. It owns a
 small fixed **pool** of persistent `<video>` elements (`POOL_SIZE = 3` =
@@ -184,34 +184,38 @@ element via `src`-swap lets **sound carry across scrolls AND across programmatic
 auto-advance** after one sound-on tap — the headline 0.6 win.
 
 **Cure-shape invariant (load-bearing — do NOT regress).** The always-muted cure
-(0.5.5) is preserved and strengthened: **no `<video>` ever does an ungestured
-unmuted `play()`.** Concretely: the feed starts **"paused-but-unmuted"** (onMount
-sets `muted = false`, but the active card is NOT autoplayed — it sits idle on its
-poster; there is no `loadMute`). The **first tap** (`tapActive`/`toggleMute` →
-`blessPool`) is a genuine in-gesture `play()` on an idle element, which iOS
-authorizes for audible output and mints the durable per-element grant for the whole
-pool. After that, a becoming-active card is a D-safe off-gesture `muted = false` on
-an already-playing blessed element (never a pause→play→unmute). The `canplay`
-self-heal (`shouldRetryOnPlayable`) is gated on `blessed` so it can't muted-autoplay
-the active card pre-bless — doing so would leave it mid-muted-autoplay, which can't
-then be cleanly blessed in the gesture (the "first-bless-pause").
+(0.5.5) is preserved: **no `<video>` ever does an ungestured unmuted `play()`.**
+Concretely (0.6.1 model — reverted 0.6.0's start-paused, see the two-tap note
+below): every pool element **muted-autoplays continuously** from load (onMount sets
+`muted = true`, so the rail shows the muted "tap to unmute" icon; there is no
+`loadMute`). The **first tap** (`tapActive`/`toggleMute` → `blessPool`) is a **bare
+synchronous `muted = false` flip** on the already-playing pool elements (neighbours
+re-muted in the same loop) — iOS grants it because each element is already playing
+_in_ the gesture, minting the durable per-element grant for the whole pool. After
+that, a becoming-active card is a D-safe off-gesture `muted = false` on an already-
+playing blessed element (never a pause→play→unmute). `assertActiveAudio`
+(`muted = !(blessed && !muted)`) forces muted pre-bless even on the playing active
+card, so audible output is gated entirely on the gesture-minted bless. The `canplay`
+self-heal (`shouldRetryOnPlayable`) recovers a cold muted-autoplay; the retry is
+always a _muted_ play, so it is cure-safe pre-bless (0.6.0's `blessed` gate was only
+needed while pre-bless was start-paused, and was removed in 0.6.1).
 
-**Known iOS wall — the first-card two-tap (tracked for 0.6.1).** Turning sound on
-for the very first (cold) card can need a second tap. This is a **documented WebKit
-policy**, not a forya bug: WebKit grants an off-gesture unmute only on an element
-whose playback the gesture is _driving_; a **paused, fully-buffered idle element**
-is exactly the case it refuses. On the LAN the element is ~always buffered by tap
-time (`v.load()` + native preload fill fast — a prewarm-off A/B confirmed prewarm
-is NOT the cause; the `rs=0 → one-tap` case is just a rare fast-tap before
-buffering). The canonical fix (video.js / YouTube / FB) is **muted-play-then-unmute
-in-gesture**: keep the active card continuously playing-muted and have the tap flip
-`muted = false` synchronously (no pause, no re-play). That **re-opens the
-start-paused decision (#472)** — it means muted-autoplaying the active card again
-(still muted, so the no-audible-autoplay guarantee holds), with the bless = a bare
-sync `muted = false`. It's a core-bless rewrite that risks the proven carry, so it
-needs on-device confirmation → 0.6.1 (`two-tap-investigation.md` has the full impl +
-device-test protocol). Sound carries fine once started; this is a first-card-only
-nit.
+**First-card two-tap — FIXED in 0.6.1.** 0.6.0 sometimes needed a second tap to
+start the very first (cold/buffered) card with sound. Root cause (**documented
+WebKit policy**, not a forya bug): WebKit grants an unmute only on an element whose
+playback the gesture is _driving_; a **paused, fully-buffered idle element** —
+0.6.0's start-paused active card at tap time — is exactly the case it refuses (a
+cold element one-tapped only incidentally, since its `play()` _is_ the load WebKit
+blesses; on the LAN `v.load()` + native preload buffer fast, and a prewarm-off A/B
+confirmed prewarm was not the cause). The fix (canonical video.js / YouTube / FB
+shape) is the **muted-autoplay + in-gesture `muted = false` flip** described in the
+cure-shape note above: it **reverts the start-paused model (#472)** back to muted-
+autoplaying the active card (still muted → the no-audible-autoplay guarantee holds),
+with the bless reduced to a bare synchronous unmute of an already-playing element.
+**Verified one-tap on device (iOS 26.5.1).** The `DEBUG_PLAYBACK` overlay's `ua=`
+field (`navigator.userActivation.isActive`, captured at the bless flip) reads
+gesture-liveness if it ever regresses. Full background + device-test protocol:
+`two-tap-investigation.md`.
 
 **iOS silent/ringer switch (NOT a bug).** With the hardware silent switch on, iOS
 mutes inline `<video>` audio regardless of a valid unmute (`snd=1` in the

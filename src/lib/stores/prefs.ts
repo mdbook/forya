@@ -7,10 +7,11 @@ const muteKey = (feedName: string) => `forya:${feedName}:mute`;
 const infoKey = (feedName: string) => `forya:${feedName}:info`;
 const autoAdvanceKey = (feedName: string) => `forya:${feedName}:autoadvance`;
 
-// NOTE (0.6.0): there is no loadMute — Feed starts every session "paused-but-unmuted"
-// (onMount sets muted=false; the first tap blesses + plays with sound), so a persisted
-// mute pref is never read back. saveMute is kept only so the toggle's runtime state is
-// written (harmless); honoring it on load is a deferred behavior choice, not a bug.
+// NOTE (0.6.1): there is no loadMute — Feed starts every session muted-autoplaying
+// (onMount sets muted=true; the active card autoplays muted and the first tap flips
+// muted=false in-gesture to bless + play with sound), so a persisted mute pref is never
+// read back. saveMute is kept only so the toggle's runtime state is written (harmless);
+// honoring it on load is a deferred behavior choice, not a bug.
 
 /** Persist the mute preference. */
 export function saveMute(feedName: string, muted: boolean): void {

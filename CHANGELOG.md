@@ -4,6 +4,42 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.6.1 — first-card two-tap fix (muted-autoplay + in-gesture unmute)
+
+The 0.6.0 first card sometimes needed **two taps** to start with sound. Unmuting a
+paused, fully-buffered idle `<video>` via an in-gesture `pause()→muted=false→play()`
+is the "start audible from a buffered paused element" transition WebKit refuses (a
+cold element one-tapped only incidentally — its `play()` _is_ the load WebKit
+blesses). Fixed by switching to the canonical iOS tap-to-unmute shape: the active
+card now **muted-autoplays continuously** and the first tap just flips `muted=false`
+**synchronously in the gesture** on the already-playing element — which WebKit
+grants because there's no separate "start audible from paused" decision. Verified
+on device (iOS 26.5.1): one tap → sound.
+
+This **reverts the 0.6.0 "start-paused" model** back to muted-autoplay. The always-
+muted cure is unchanged as a hard invariant: **no `<video>` ever does an ungestured
+unmuted `play()`** — every `play()` is muted, and the only unmute is a flip on an
+already-playing element (off-gesture only once the pool is blessed + the element is
+confirmed playing). The sound-on carry (card→card + across auto-advance) is
+unaffected.
+
+### Changed
+
+- **Active card muted-autoplays on load** instead of sitting paused on its poster;
+  the rail's muted icon is the "tap to unmute" affordance. The pool's neighbours
+  also play muted continuously, so the bless gesture only ever flips `muted=false`
+  on already-playing elements.
+- **`blessPool` is now a bare synchronous `muted=false` flip** (no `pause()` /
+  `play()` / `await`), re-muting neighbours in the same loop.
+- **Reverted the 0.6.0 `blessed` gate on `shouldRetryOnPlayable`** — the `canplay`
+  self-heal again recovers a cold pre-bless muted-autoplay; the retry is always a
+  _muted_ play (audible output is gated separately), so it stays cure-safe.
+
+### Added
+
+- **`ua=` in the DEBUG overlay** — `navigator.userActivation.isActive` captured at
+  the bless flip, to read gesture-liveness on device.
+
 ## 0.6.0 — sound-on carry via a pooled `<video>` rearchitecture
 
 The headline feature: **turn sound on once and it carries** — across scrolls
