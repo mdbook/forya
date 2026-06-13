@@ -140,6 +140,12 @@
 	// off-screen pre-roll the post-bless neighbour accumulated — without re-seeking on every
 	// syncPool (slot re-registration etc.) for a card that's already the active one.
 	let lastDrivenActive = -1;
+	// Consecutive auto-advance error-skips (review #3c). Reset on any successful play
+	// (onActivePlaying), so isolated broken clips skip but a feed of all-404s can't scroll-
+	// loop: after MAX_ERROR_SKIPS in a row with no success we stop and leave the card blocked
+	// (tap-to-play) rather than cascading to the feed end.
+	let errorSkips = 0;
+	const MAX_ERROR_SKIPS = 3;
 
 	function slotForCard(card: number): number {
 		return slotToCard.indexOf(card);
@@ -255,6 +261,7 @@
 	// recycle. This restores M1's poster-until-active visuals.
 	function onActivePlaying() {
 		activeBlocked = false;
+		errorSkips = 0; // a successful play breaks any auto-advance error-skip chain (#3c)
 		const v = activeVideo();
 		if (v) {
 			v.classList.add('revealed');
@@ -285,6 +292,14 @@
 			activeBuffering = false;
 			activeBlocked = true;
 			pushDebug(activeIndex, 'error', pool[slot]?.error ? `code${pool[slot]!.error!.code}` : 'err');
+			// Auto-advance past an errored active card (e.g. 404 / decode-fail): it fires `error`,
+			// never `ended`, so without this the feed dead-ends on a broken clip. Mirrors the
+			// `ended`→next handler, but CAPPED (errorSkips, reset on a successful play) so a feed
+			// of all-broken clips can't cascade-scroll to the end. (review #3c)
+			if (autoAdvance && errorSkips < MAX_ERROR_SKIPS) {
+				errorSkips++;
+				scrollTo(activeIndex + 1);
+			}
 		}
 	}
 
