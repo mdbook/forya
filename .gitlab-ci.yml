@@ -83,6 +83,11 @@ build:
     - export IMAGE_DESTINATIONS="--destination $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
     - if [ "$CI_COMMIT_BRANCH" = "main" ]; then export IMAGE_DESTINATIONS="$IMAGE_DESTINATIONS --destination $CI_REGISTRY_IMAGE:$IMAGE_VERSION_TAG --destination $CI_REGISTRY_IMAGE:latest"; fi
     - if [ "$CI_COMMIT_BRANCH" = "dev" ]; then export IMAGE_DESTINATIONS="$IMAGE_DESTINATIONS --destination $CI_REGISTRY_IMAGE:dev"; fi
+    # Milestone branches (pool-*, 0.6 sound-carry): publish :$SHA (above, immutable —
+    # what infra SHA-pins the canary to) + a moving :<branch> tag. NOT main/dev so no
+    # :latest/:version/:dev and version_guard never fires (main-only). Non-destructive
+    # canary path so we never force-push the publicly-mirrored dev branch.
+    - case "$CI_COMMIT_BRANCH" in pool-*) export IMAGE_DESTINATIONS="$IMAGE_DESTINATIONS --destination $CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH" ;; esac
     - mkdir -p /kaniko/.docker
     - printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}' "$CI_REGISTRY" "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" > /kaniko/.docker/config.json
     - >
@@ -96,6 +101,7 @@ build:
       when: never
     - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_BRANCH == "dev"'
+    - if: '$CI_COMMIT_BRANCH =~ /^pool-/'
 
 # ---------------------------------------------------------------------------
 # notification — Discord webhook on success/failure (SPEC §7), via the shared
