@@ -772,6 +772,20 @@
 		untrack(() => syncPool());
 	});
 
+	// Re-fit the parked pooled <video>s when the viewport aspect changes (rotate/resize).
+	// applyFit otherwise runs only on a src-swap (syncPool's recycle branch), so a rotation
+	// would leave an already-parked element letterboxed for the OLD aspect until it recycles.
+	// Touches ONLY the fit CLASS (object-fit cover/contain) — never play state. (review #3a)
+	$effect(() => {
+		void viewportAR;
+		untrack(() => {
+			for (let s = 0; s < pool.length; s++) {
+				const card = slotToCard[s];
+				if (card !== null && visible[card]) applyFit(pool[s], visible[card]);
+			}
+		});
+	});
+
 	$effect(() => {
 		saveMute(feedName, muted);
 	});
