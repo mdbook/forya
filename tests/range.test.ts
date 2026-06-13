@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { RequestHandler } from '@sveltejs/kit';
-import { resolveRange } from '../src/lib/server/videos';
+import { resolveRange, weakETag } from '../src/lib/server/videos';
 
 const SIZE = 1000;
 
@@ -221,5 +221,27 @@ describe('GET|HEAD /api/media/[name]', () => {
 		// mirrors what the router hands us once %2f is decoded
 		const probe = decodeURIComponent('..%2f..%2fetc%2fpasswd');
 		await expect(GET(event(probe))).rejects.toMatchObject({ status: 404 });
+	});
+
+	// 0.7.0: the cheap (readdir-only) feed manifest now OMITS size/mtime on poster-
+	// off feeds, so the byte-serve path must stay wholly independent of the manifest
+	// — it computes every header from the file's OWN stat. These lock that contract
+	// (the thing most at risk once the scan stopped statting) AND the lazy info-
+	// overlay size source (a HEAD content-length read for the single active card).
+	it('0.7.0: HEAD content-length equals the real on-disk size (lazy info-size source)', async () => {
+		const onDisk = (await fsp.stat(path.join(VIDEO_DIR, NAME))).size;
+		const res = (await HEAD(event(NAME))) as Response;
+		expect(res.status).toBe(200);
+		expect(Number(res.headers.get('content-length'))).toBe(onDisk);
+		expect(onDisk).toBe(SIZE);
+	});
+
+	it('0.7.0: ETag/Last-Modified derive from the file stat, not the feed manifest', async () => {
+		const st = await fsp.stat(path.join(VIDEO_DIR, NAME));
+		const res = (await GET(event(NAME))) as Response;
+		// weakETag(realSize, realMtime) — proves dropping size/mtime from the cheap
+		// scan can't perturb the byte-serve contract (the endpoint stats the file).
+		expect(res.headers.get('etag')).toBe(weakETag(st.size, st.mtimeMs));
+		expect(res.headers.get('last-modified')).toBe(st.mtime.toUTCString());
 	});
 });
