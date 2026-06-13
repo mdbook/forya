@@ -81,6 +81,18 @@
 	let seekEl = $state<HTMLElement>();
 	const progress = $derived(duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0);
 
+	// Spoken position for the seek slider (a11y, #4): a time readout ("0:34 of 1:20") so a
+	// screen reader announces something meaningful instead of the bare percent aria-valuenow.
+	function fmtTime(s: number): string {
+		if (!Number.isFinite(s) || s < 0) s = 0;
+		const m = Math.floor(s / 60);
+		const sec = Math.floor(s % 60);
+		return `${m}:${sec.toString().padStart(2, '0')}`;
+	}
+	const valueText = $derived(
+		duration > 0 ? `${fmtTime(currentTime)} of ${fmtTime(duration)}` : 'Video position'
+	);
+
 	// Report the slot element to Feed via a Svelte action (fires on mount with the node,
 	// and on destroy with null) so Feed can park/reparent the pooled <video> into it.
 	function slot(node: HTMLElement) {
@@ -179,6 +191,7 @@
 			aria-valuemin={0}
 			aria-valuemax={100}
 			aria-valuenow={Math.round(progress)}
+			aria-valuetext={valueText}
 			onpointerdown={onSeekPointerDown}
 			onpointermove={onSeekPointerMove}
 			onpointerup={onSeekPointerUp}
@@ -268,6 +281,12 @@
 		background: transparent;
 		cursor: pointer;
 		appearance: none;
+	}
+
+	/* The .tap fills the cell, so the global :focus-visible ring (outward offset) would clip
+	   at the viewport edge — inset it so the keyboard-focus indicator is actually visible. (#4) */
+	.tap:focus-visible {
+		outline-offset: -4px;
 	}
 
 	.tap-hint {

@@ -125,4 +125,14 @@
 	.rail-btn:active {
 		transform: scale(0.92);
 	}
+
+	/* Rounded keyboard-focus ring (the global square :focus-visible outline reads wrong on a
+	   50%-radius button); box-shadow follows the border-radius. Double ring stays visible on
+	   any underlying frame. (#4) */
+	.rail-btn:focus-visible {
+		outline: none;
+		box-shadow:
+			0 0 0 2px #000,
+			0 0 0 4px #fff;
+	}
 </style>

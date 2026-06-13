@@ -178,17 +178,36 @@
 	// SvelteSet: deliberately non-reactive, read only imperatively from prewarm() under the
 	// syncPool untrack (same philosophy as the plain `pool`/`slotToCard`).
 	const prewarmed: Record<string, true> = {};
+	// In-flight prewarm AbortControllers (review #5d) — lets a fast flick cancel a superseded
+	// prewarm so its 1 MB fetch can't hog the connection ahead of the new active card's own
+	// <video> load. Plain object, same non-reactive rationale as `prewarmed`.
+	const prewarmControllers: Record<string, AbortController> = {};
 	function prewarm(url: string) {
 		if (typeof fetch === 'undefined' || prewarmed[url]) return;
 		prewarmed[url] = true;
 		// Range-capped at 1 MB so we never pull the whole file; same endpoint + 206 path the
 		// <video> uses (server Range support is the reason this app exists — guarded by
-		// range.test.ts). Body drained so the partial is committed to cache. Fire-and-forget.
-		fetch(url, { headers: { Range: `bytes=0-${PREWARM_BYTES - 1}` } })
+		// range.test.ts). Body drained so the partial is committed to cache. Fire-and-forget,
+		// but abortable: cancelStalePrewarms() kills it if its card scrolls out of coverage.
+		const ac = new AbortController();
+		prewarmControllers[url] = ac;
+		fetch(url, { headers: { Range: `bytes=0-${PREWARM_BYTES - 1}` }, signal: ac.signal })
 			.then((res) => res.arrayBuffer())
+			.then(() => {
+				delete prewarmControllers[url]; // settled OK — keep `prewarmed` (it's cached now)
+			})
 			.catch(() => {
-				delete prewarmed[url]; // transient/offline — let a later syncPool retry
+				delete prewarmControllers[url];
+				delete prewarmed[url]; // aborted / transient — let a later syncPool re-warm
 			});
+	}
+	// Abort prewarm fetches whose card is no longer covered (`wanted` = urls of the new
+	// assignment; a plain array — at most POOL_SIZE entries). Only the side-channel cache-warm
+	// fetch — NEVER a <video>'s own load. (#5d)
+	function cancelStalePrewarms(wanted: string[]) {
+		for (const url in prewarmControllers) {
+			if (!wanted.includes(url)) prewarmControllers[url].abort();
+		}
 	}
 
 	// The always-muted cure (0.5.5), ported to act on the active pooled element. Muted
@@ -313,6 +332,13 @@
 		if (totalCards === 0) return;
 		const targets = coverage(activeIndex, POOL_SIZE, totalCards);
 		const next = reassignPool(slotToCard, targets, POOL_SIZE);
+		// Cancel prewarm fetches for cards no longer in the new coverage window (#5d).
+		const wantedUrls: string[] = [];
+		for (let s = 0; s < POOL_SIZE; s++) {
+			const c = next[s];
+			if (c !== null && visible[c]) wantedUrls.push(visible[c].url);
+		}
+		cancelStalePrewarms(wantedUrls);
 		for (let s = 0; s < POOL_SIZE; s++) {
 			const v = pool[s];
 			const card = next[s];
@@ -523,9 +549,18 @@
 		}
 	}
 
+	function prefersReducedMotion(): boolean {
+		return (
+			typeof window !== 'undefined' &&
+			!!window.matchMedia &&
+			window.matchMedia('(prefers-reduced-motion: reduce)').matches
+		);
+	}
+
 	function scrollTo(index: number) {
 		const i = Math.max(0, Math.min(visible.length - 1, index));
-		cardEls[i]?.scrollIntoView({ behavior: 'smooth' });
+		// Honor prefers-reduced-motion: jump instead of the smooth full-viewport glide. (#4)
+		cardEls[i]?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
 	}
 
 	function tapActive() {
@@ -609,6 +644,16 @@
 		}
 	}
 
+	// True when keyboard focus sits on an interactive control (rail button, seek slider, link,
+	// form field) — so the global Space handler doesn't shadow its native activation. (#4)
+	function focusIsInteractive(): boolean {
+		if (typeof document === 'undefined') return false;
+		const el = document.activeElement;
+		if (!el) return false;
+		if (el.getAttribute('role') === 'slider') return true;
+		return ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName);
+	}
+
 	function onKeydown(e: KeyboardEvent) {
 		switch (e.key) {
 			case 'ArrowDown':
@@ -622,6 +667,10 @@
 				scrollTo(activeIndex - 1);
 				break;
 			case ' ':
+				// Don't hijack Space when a control is focused — let it natively activate that
+				// button/slider (WCAG keyboard operability). Space still toggles play when focus
+				// is on the page or the full-bleed tap target (no control focused). (#4)
+				if (focusIsInteractive()) return;
 				e.preventDefault();
 				tapActive();
 				break;
@@ -758,6 +807,7 @@
 			clearTimeout(modeTimer);
 			clearTimeout(copyTimer);
 			clearInterval(debugTimer);
+			for (const url in prewarmControllers) prewarmControllers[url].abort(); // #5d cleanup
 			for (const v of pool) {
 				v.pause();
 				v.removeAttribute('src');
