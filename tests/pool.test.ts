@@ -52,7 +52,7 @@ describe('reassignPool (preserve covered bindings, recycle the rest)', () => {
 	it('cold start: assigns the initial coverage to free slots', () => {
 		const next = reassignPool([null, null, null], [0, 1, 2], 3);
 		// every target covered exactly once
-		expect([...next].sort((a, b) => (a! - b!))).toEqual([0, 1, 2]);
+		expect([...next].sort((a, b) => a! - b!)).toEqual([0, 1, 2]);
 	});
 
 	it('scroll down by one: keeps the two still-covered cards, recycles only the dropped slot', () => {
@@ -85,7 +85,7 @@ describe('reassignPool (preserve covered bindings, recycle the rest)', () => {
 		// active jumps far (flick) — coverage [4,5,6] → [14,15,16], nothing reusable.
 		const prev = [4, 5, 6];
 		const next = reassignPool(prev, [14, 15, 16], 3);
-		expect([...next].sort((a, b) => (a! - b!))).toEqual([14, 15, 16]);
+		expect([...next].sort((a, b) => a! - b!)).toEqual([14, 15, 16]);
 	});
 
 	it('every target card ends up covered exactly once (no dup, no drop)', () => {
