@@ -1,143 +1,114 @@
 <script lang="ts">
-	// One feed item. The iOS-critical bits (SPEC §4): the <video> carries BOTH
-	// `muted` and `playsinline` (the two autoplay requirements), plus `loop` and
-	// a reactive `preload`. Play/pause is driven by the `active` prop from the
-	// single IntersectionObserver in Feed.svelte — this card never observes
-	// intersection itself, so only one video plays at a time.
-	//
-	// As of 0.3.1, Feed only MOUNTS this component for cards inside the lazy-load
-	// window (off-window cards render a cheap placeholder) — so a mounted card
-	// always carries a real `<video src>`. Leaving the window unmounts the
-	// component, which removes the <video> and releases the iOS decoder; the
-	// onDestroy teardown makes that release explicit. This supersedes the 0.3.0
-	// in-component src/decoder hysteresis.
-	import { flushSync, onDestroy, untrack } from 'svelte';
+	// Presentation SHELL for one feed item (0.6). It no longer owns a `<video>` — the
+	// iOS play machine moved to a small PERSISTENT POOL of elements owned by Feed.svelte
+	// (so a gesture-blessed element can be reused via `src`-swap and carry sound across
+	// cards; see src/lib/pool.ts). This component renders only the chrome: the gradient/
+	// poster placeholder, the reveal cross-fade target (a `slot` where Feed parks the
+	// pooled `<video>`), the full-bleed tap target, the active-card seek bar, and the
+	// play/buffering affordances. Playback STATE is owned by Feed and passed in;
+	// gestures (tap, seek) are reported back out. The single IntersectionObserver still
+	// lives in Feed and drives `active`.
 	import Play from '@lucide/svelte/icons/play';
 	import { pickFit } from '$lib/fit';
-	import { isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
 	import type { FeedItem } from '$lib/types';
 
 	let {
 		item,
 		active,
-		preload,
-		muted,
-		autoAdvance,
 		viewportAR,
 		posters,
-		onfinished,
-		onready,
-		onblocked,
-		debug = false,
-		ondebug
+		revealed,
+		buffering,
+		blocked,
+		paused,
+		currentTime,
+		duration,
+		onslot,
+		onseek,
+		onseekby,
+		ontap
 	}: {
 		item: FeedItem;
 		active: boolean;
-		preload: 'auto' | 'metadata' | 'none';
-		muted: boolean;
-		/** Advance to the next card on end instead of looping. */
-		autoAdvance: boolean;
 		/** Viewport aspect ratio (w/h), reactive — drives object-fit so the card
-		 *  re-letterboxes on rotate/resize, not just at load. */
+		 *  re-letterboxes on rotate/resize. */
 		viewportAR: number;
-		/** Generated posters available (DATA_DIR on, 0.5) — gate the `/api/poster`
-		 *  request so a disabled instance makes none. */
+		/** Generated posters available (DATA_DIR on) — gate the `/api/poster` request. */
 		posters: boolean;
-		onfinished: () => void;
-		/** Fired when THIS card (while active) reaches `playing` — Feed uses it to
-		 *  release the readiness gate so neighbours may start preloading (0.4). */
-		onready?: () => void;
-		/** Fired (while active) whenever this card's autoplay-`blocked` state changes
-		 *  (0.5.3) — Feed tracks it as `activeBlocked` so a user gesture can re-grant
-		 *  iOS's document-wide autoplay permission with a synchronous in-gesture
-		 *  `play()`. Distinct from a user pause, so it never fights one. */
-		onblocked?: (blocked: boolean) => void;
-		/** Diagnostic flag (0.5.4, DEBUG_PLAYBACK). When false (default) NO debug
-		 *  events are emitted — entirely inert in prod. */
-		debug?: boolean;
-		/** Diagnostic sink (0.5.4): emits playback events (try / reject+err.name /
-		 *  error+code / play) so Feed's debug overlay can show the sequence at the
-		 *  ~every-8 break. Only called when `debug` is true. */
-		ondebug?: (kind: string, detail?: string) => void;
+		/** Feed: this card's parked pooled `<video>` has painted (reached `playing`) →
+		 *  fade the placeholder out over it (the reveal cross-fade). */
+		revealed: boolean;
+		/** Active-card playback state, owned by Feed (the pooled element it drives). */
+		buffering: boolean;
+		blocked: boolean;
+		paused: boolean;
+		currentTime: number;
+		duration: number;
+		/** Report this shell's slot element (where Feed parks the pooled `<video>`), or
+		 *  null on teardown, so Feed can reparent the element onto the active/neighbour
+		 *  cards. */
+		onslot: (el: HTMLElement | null) => void;
+		/** Seek the active card's pooled element to `frac` (0..1) of duration. */
+		onseek: (frac: number) => void;
+		/** Nudge the active card's pooled element by `delta` seconds (keyboard). */
+		onseekby: (delta: number) => void;
+		/** Tap the full-bleed target → Feed toggles play/pause on the active element. */
+		ontap: () => void;
 	} = $props();
 
-	/** Emit a diagnostic playback event (0.5.4) — no-op unless `debug` is on. */
-	function dbg(kind: string, detail?: string) {
-		if (debug) ondebug?.(kind, detail);
-	}
+	// The manual play affordance shows for a blocked (autoplay-rejected) OR user-paused
+	// ACTIVE card — and only then, so a normally-autoplaying card never flashes a play
+	// button. The spinner shows only when that affordance is NOT up (never stacked).
+	const showPlay = $derived(active && (blocked || paused));
+	const showSpinner = $derived(active && buffering && !showPlay);
 
-	let el = $state<HTMLVideoElement>();
-	// `hasPlayed` gates the REVEAL (0.3.1): the <video> only becomes visible once
-	// it has actually reached `playing` and painted a frame. Until then the
-	// gradient placeholder shows — so a blocked / pre-gesture / still-buffering
-	// card never flashes a black <video> (the nudge that used to force a poster
-	// frame is gone). A user-paused card keeps hasPlayed=true, so it shows its
-	// real painted frame, not the placeholder.
-	let hasPlayed = $state(false);
-	let buffering = $state(false);
-	// `blocked`: autoplay was attempted and rejected (no gesture yet). `paused`:
-	// the user tapped to pause. The manual play affordance shows for EITHER — and
-	// only then, so a normally-autoplaying card never flashes a play button. The
-	// buffering spinner is rendered only when that affordance is NOT up, so the
-	// two can never stack (the "buffer behind play button" bug).
-	let blocked = $state(false);
-	let paused = $state(false);
-	// `released` (0.4): drops the `src` to free the iOS decoder so a dead element
-	// can't poison the NEXT card (the autoplay cascade). As of 0.5.1 this is set
-	// ONLY by a genuine media `error` (or unmount) — NOT by a transient play()
-	// rejection, which is usually just a not-yet-buffered card the feed scrolled to.
-	// The reveal-gate already shows the placeholder, so nothing visual is lost; a
-	// tap (or re-activation) re-attaches `src` and retries.
-	let released = $state(false);
-	// `errored` (0.5.1): a real media/decode `error` fired. Distinct from a
-	// transient play() rejection — it gates the `canplay`/`loadeddata` self-heal
-	// (don't loop trying to play a genuinely broken source; recovery there is a tap
-	// or re-activation). Cleared on (re)activation and on a user tap.
-	let errored = $state(false);
-	// Monotonic token that cancels stale async play retries (0.4). Bumped on every
-	// fresh attempt, on going inactive, and on destroy — a retry whose token is
-	// stale no-ops, so a scrolled-past / unmounted card never replays its decode
-	// on top of the next card's startup.
-	let playGen = 0;
-	// Intrinsic video dimensions: measured from the element on loadedmetadata, but
-	// SEEDED from the manifest (item.width/height, 0.5/M2) until then — so object-
-	// fit is correct on first paint and never JUMPS when metadata arrives. Measured
-	// dims win once present (authoritative).
-	let vw = $state(0);
-	let vh = $state(0);
-	const fitW = $derived(vw || item.width || 0);
-	const fitH = $derived(vh || item.height || 0);
+	// Object-fit from the manifest's intrinsic dims (0.5/M2) + viewportAR; reactive so a
+	// rotate re-letterboxes. The pooled <video>'s own fit class is set by Feed (it owns
+	// the element); here we only need it for the poster image.
+	const fitW = $derived(item.width || 0);
+	const fitH = $derived(item.height || 0);
+	const fit = $derived(pickFit(fitW, fitH, viewportAR));
 
-	// Poster (0.5/M3): a generated thumbnail shown in the placeholder until the
-	// video reveals. Only requested when the feature is on (`posters`); `posterOk`
-	// gates display to a SUCCESSFUL load, so a 204 (no poster yet) or error simply
-	// leaves the gradient — no broken-image flash.
+	// Poster (0.5/M3): shown in the placeholder until the video reveals. Requested only
+	// when the feature is on; `posterOk` gates display to a SUCCESSFUL load so a 204/error
+	// just leaves the gradient (no broken-image flash).
 	let posterOk = $state(false);
 	const posterUrl = $derived(
 		posters ? `/api/poster/${encodeURIComponent(item.name)}?v=${item.mtime}` : undefined
 	);
 
-	const showPlay = $derived(active && (blocked || paused));
-	const showSpinner = $derived(active && buffering && !showPlay);
-
-	// Reactive on viewportAR, so rotating/resizing re-letterboxes. Decision logic
-	// lives in the pure `pickFit` (guarded by tests/fit.test.ts).
-	const fit = $derived(pickFit(fitW, fitH, viewportAR));
-
-	// Seek bar (active card only). currentTime/duration are two-way/readonly media
-	// bindings; dragging sets currentTime, which issues a fresh Range request —
-	// the exact seek path erin broke, so this doubles as live Range validation.
-	let currentTime = $state(0);
-	let duration = $state(0);
 	let scrubbing = $state(false);
 	let seekEl = $state<HTMLElement>();
 	const progress = $derived(duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0);
 
+	// Spoken position for the seek slider (a11y, #4): a time readout ("0:34 of 1:20") so a
+	// screen reader announces something meaningful instead of the bare percent aria-valuenow.
+	function fmtTime(s: number): string {
+		if (!Number.isFinite(s) || s < 0) s = 0;
+		const m = Math.floor(s / 60);
+		const sec = Math.floor(s % 60);
+		return `${m}:${sec.toString().padStart(2, '0')}`;
+	}
+	const valueText = $derived(
+		duration > 0 ? `${fmtTime(currentTime)} of ${fmtTime(duration)}` : 'Video position'
+	);
+
+	// Report the slot element to Feed via a Svelte action (fires on mount with the node,
+	// and on destroy with null) so Feed can park/reparent the pooled <video> into it.
+	function slot(node: HTMLElement) {
+		onslot(node);
+		return {
+			destroy() {
+				onslot(null);
+			}
+		};
+	}
+
 	function seekToClientX(clientX: number) {
 		const r = seekEl?.getBoundingClientRect();
-		if (!r || !r.width || !duration || !el) return;
+		if (!r || !r.width || !duration) return;
 		const frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
-		el.currentTime = frac * duration;
+		onseek(frac);
 	}
 
 	function onSeekPointerDown(e: PointerEvent) {
@@ -159,215 +130,29 @@
 	}
 
 	function onSeekKey(e: KeyboardEvent) {
-		if (!el || !duration) return;
+		if (!duration) return;
 		if (e.key === 'ArrowLeft') {
 			e.stopPropagation();
-			el.currentTime = Math.max(0, currentTime - 5);
+			onseekby(-5);
 		} else if (e.key === 'ArrowRight') {
 			e.stopPropagation();
-			el.currentTime = Math.min(duration, currentTime + 5);
+			onseekby(5);
 		}
-	}
-
-	function readDimensions(v: HTMLVideoElement) {
-		vw = v.videoWidth;
-		vh = v.videoHeight;
-	}
-
-	function tryPlay(v: HTMLVideoElement) {
-		// Muted autoplay is gesture-free (SPEC §4, criterion 3): we ALWAYS attempt
-		// it. A scrolled-to / freshly-mounted active card can transiently reject
-		// before it's ready, so on rejection we retry ONCE on the next frame. Every
-		// callback is guarded by `gen` (0.4): if the card went inactive / unmounted
-		// / a newer attempt started, the stale callback NO-OPS — so a failing decode
-		// can't keep firing on top of the next card. `AbortError` (a pause- or
-		// load-interrupted play) is benign and never marks the card blocked.
-		const gen = ++playGen;
-		dbg('try');
-		v.muted = muted;
-		const p = v.play();
-		if (!p || typeof p.then !== 'function') return;
-		p.then(() => {
-			if (gen === playGen) blocked = false;
-		}).catch((err: unknown) => {
-			if (gen !== playGen || !active) return;
-			if (err instanceof DOMException && err.name === 'AbortError') return;
-			requestAnimationFrame(() => {
-				if (gen !== playGen || !active || !el) return;
-				el.play()
-					.then(() => {
-						if (gen === playGen) blocked = false;
-					})
-					.catch((err2: unknown) => {
-						if (gen !== playGen || !active) return;
-						if (err2 instanceof DOMException && err2.name === 'AbortError') return;
-						dbg('reject', err2 instanceof DOMException ? err2.name : 'err');
-						// Still failing after the rAF retry → surface tap-to-play, but DON'T
-						// release the decoder (0.5.1): usually just a not-yet-buffered card the
-						// feed scrolled to, so keep `src` and let `canplay`/`loadeddata` re-attempt
-						// once the media is ready (`retryIfPlayable`). A genuine decode error
-						// releases via the element's `onerror` — that's the real cascade case.
-						blocked = true;
-						// Pure-race edge (0.5.1): if the media is ALREADY playable here, this
-						// wasn't a buffering gap — it lost a decoder-handover race, and
-						// canplay/loadeddata already fired so the event self-heal can't catch
-						// it. Do ONE bounded, gen-guarded delayed re-attempt (not polling) to
-						// break the race; a not-yet-buffered card (readyState below current-
-						// data) is left to the canplay path instead.
-						if (el && isMediaReady(el.readyState)) {
-							setTimeout(() => {
-								if (gen !== playGen || !active || !el) return;
-								el.play()
-									.then(() => {
-										if (gen === playGen) blocked = false;
-									})
-									.catch(() => {
-										/* leave blocked → tap-to-play; one delayed retry only */
-									});
-							}, 250);
-						}
-					});
-			});
-		});
-	}
-
-	// Active → play; inactive → pause. Reads only `active`; mute changes are
-	// handled by the separate effect below so toggling mute never restarts playback.
-	$effect(() => {
-		const v = el;
-		if (!v) return;
-		if (active) {
-			untrack(() => {
-				// Fresh attempt on (re)activation: re-attach src if it was released by
-				// an earlier error, clear the blocked/errored affordances, then play.
-				released = false;
-				errored = false;
-				blocked = false;
-				tryPlay(v);
-			});
-		} else {
-			untrack(() => {
-				playGen++; // cancel any pending retry for this card
-				v.pause();
-			});
-		}
-	});
-
-	// Keep the live mute state in sync without re-triggering play/pause.
-	$effect(() => {
-		const v = el;
-		if (v) v.muted = muted;
-	});
-
-	// Report autoplay-`blocked` to Feed (0.5.3) — but ONLY while this card is the
-	// active one. The `if (active)` short-circuit means an inactive card never
-	// tracks `blocked`, so a scrolled-past card can't clobber Feed's `activeBlocked`
-	// (which it also resets on every active-index change). Feed uses this to fire a
-	// synchronous in-gesture `play()` and re-grant iOS's document-wide autoplay
-	// permission. Reads `blocked` (a rejected muted-autoplay) — never `paused`, so
-	// the gesture-unlock can't fight an intentional user pause.
-	$effect(() => {
-		if (active) onblocked?.(blocked);
-	});
-
-	// Explicit decoder release on unmount: when the card leaves the window Feed
-	// unmounts this component, so detach the source and load() to free the iOS
-	// decoder deterministically rather than waiting on GC.
-	onDestroy(() => {
-		playGen++; // cancel any pending retry — element is going away
-		const v = el;
-		if (!v) return;
-		v.pause();
-		v.removeAttribute('src');
-		v.load();
-	});
-
-	function togglePlay() {
-		const v = el;
-		if (!v) return;
-		if (v.paused) {
-			// If a prior failure released `src`, re-attach it synchronously (still
-			// inside this tap gesture) before playing.
-			if (released) {
-				released = false;
-				flushSync();
-			}
-			paused = false;
-			blocked = false;
-			errored = false; // a user tap is a fresh attempt — re-enable canplay self-heal
-			tryPlay(v);
-		} else {
-			v.pause();
-			paused = true;
-		}
-	}
-
-	// Self-heal (0.5.1): the `<video>`'s `canplay`/`loadeddata` fire when the media
-	// becomes playable — which, for the active card, is typically AFTER the eager
-	// activation play() attempt already rejected (a freshly-mounted card the feed
-	// scrolled to, loading over a slow CIFS origin; the 0.4.0 single-rAF retry is
-	// far too early). Re-attempt then, but only if the card still wants to play
-	// (`shouldRetryOnPlayable`, pure + tested). `tryPlay` bumps the generation
-	// token, so a stale/inactive card no-ops and a success flips `hasPlayed` →
-	// further fires short-circuit. This is the recovery a `blocked` (no longer
-	// `released`) card was missing — it never went dark, it just hadn't buffered.
-	function retryIfPlayable() {
-		const v = el;
-		if (v && shouldRetryOnPlayable({ active, paused, hasPlayed, errored })) tryPlay(v);
 	}
 </script>
 
 <div class="media">
-	<video
-		bind:this={el}
-		bind:currentTime
-		bind:duration
-		src={released ? undefined : item.url}
-		{preload}
-		muted
-		playsinline
-		loop={!autoAdvance}
-		class:revealed={hasPlayed}
-		class:contain={fit === 'contain'}
-		onloadedmetadata={() => readDimensions(el!)}
-		oncanplay={retryIfPlayable}
-		onloadeddata={retryIfPlayable}
-		onended={() => {
-			if (active && autoAdvance) onfinished();
-		}}
-		onwaiting={() => (buffering = true)}
-		onerror={() => {
-			// A media/decode error must not leave an eternal spinner or hold a
-			// poisoned pipeline: release the decoder; surface tap-to-play if active.
-			// `errored` (0.5.1) stops the canplay/loadeddata self-heal from looping on
-			// a genuinely broken source — recovery there is a tap or re-activation.
-			buffering = false;
-			released = true;
-			errored = true;
-			if (active) blocked = true;
-			dbg('error', el?.error ? `code${el.error.code}` : 'err');
-		}}
-		onplay={() => {
-			paused = false;
-			blocked = false;
-		}}
-		onplaying={() => {
-			hasPlayed = true;
-			buffering = false;
-			blocked = false;
-			if (active) onready?.();
-			dbg('play');
-		}}
-	></video>
+	<!-- Slot: Feed parks the pooled <video> here (absolutely positioned to fill .media).
+	     The reveal cross-fade is driven by Feed toggling the element's own `revealed`
+	     class in lockstep with the placeholder fade below (gated on `revealed`). -->
+	<div class="slot" use:slot></div>
 
-	<!-- Reveal cross-fade (0.5.3): the placeholder (gradient + poster + caption)
-	     stays mounted and fades out over the SAME 0.25s the <video> fades IN, so the
-	     black .media bg never shows through for a frame (the #287 black flash). It's
-	     gated purely on `hasPlayed`, so a card that errors (never paints) just keeps
-	     the poster up rather than getting stuck — no held-poster edge case. The
-	     placeholder is pointer-events:none so the full-bleed tap target underneath
-	     still receives taps even while it's faded but mounted. -->
-	<div class="placeholder" class:revealed={hasPlayed}>
+	<!-- Reveal cross-fade: the placeholder (gradient + poster + caption) stays mounted and
+	     fades out over the same 0.25s the pooled <video> fades in, so the black .media bg
+	     never shows through. Gated purely on `revealed`, so a card that never paints keeps
+	     its poster rather than getting stuck. pointer-events:none so taps fall through to
+	     the full-bleed .tap button beneath. -->
+	<div class="placeholder" class:revealed>
 		{#if posterUrl}
 			<img
 				class="poster"
@@ -386,9 +171,9 @@
 		<div class="spinner" aria-hidden="true"></div>
 	{/if}
 
-	<!-- Full-bleed tap target: tap = play/pause (a real <button> for a11y +
-	     keyboard). The action rail sits above this via z-index. -->
-	<button class="tap" aria-label="Play or pause" onclick={togglePlay}></button>
+	<!-- Full-bleed tap target: tap = play/pause (a real <button> for a11y + keyboard).
+	     The action rail sits above this via z-index. -->
+	<button class="tap" aria-label="Play or pause" onclick={ontap}></button>
 
 	{#if showPlay}
 		<div class="tap-hint" aria-hidden="true">
@@ -406,6 +191,7 @@
 			aria-valuemin={0}
 			aria-valuemax={100}
 			aria-valuenow={Math.round(progress)}
+			aria-valuetext={valueText}
 			onpointerdown={onSeekPointerDown}
 			onpointermove={onSeekPointerMove}
 			onpointerup={onSeekPointerUp}
@@ -428,24 +214,12 @@
 		background: #000;
 	}
 
-	video {
+	/* The slot fills the cell; Feed parks the pooled <video> inside it. The pooled
+	   element is styled globally (it's a foreign node Feed owns, not in this scope) —
+	   see Feed.svelte's :global(.pool-video) rules. */
+	.slot {
 		position: absolute;
 		inset: 0;
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		opacity: 0;
-		transition: opacity 0.25s ease;
-	}
-
-	video.revealed {
-		opacity: 1;
-	}
-
-	/* Off-aspect (wider-than-viewport) clips letterbox instead of side-cropping.
-	   The .media background is #000, so the bars are clean black. */
-	video.contain {
-		object-fit: contain;
 	}
 
 	.placeholder {
@@ -458,19 +232,18 @@
 		/* Decorative only — let taps fall through to the full-bleed .tap button even
 		   while the placeholder is mounted-but-faded during the reveal cross-fade. */
 		pointer-events: none;
-		/* Matches video's reveal transition so the two cross-fade (no black flash). */
+		/* Matches the pooled video's reveal transition so the two cross-fade. */
 		transition: opacity 0.25s ease;
 	}
 
-	/* Faded out once the video has painted, revealing it underneath. Kept mounted
+	/* Faded out once the parked video has painted, revealing it underneath. Kept mounted
 	   (not {#if}-removed) so the fade actually runs instead of a hard cut. */
 	.placeholder.revealed {
 		opacity: 0;
 	}
 
 	/* Generated poster (0.5/M3): covers the gradient once it loads. Hidden until a
-	   successful load (`.shown`), so a 204/error never flashes a broken image.
-	   Matches the video's letterbox decision via `.contain`. */
+	   successful load (`.shown`), so a 204/error never flashes a broken image. */
 	.poster {
 		position: absolute;
 		inset: 0;
@@ -510,6 +283,12 @@
 		appearance: none;
 	}
 
+	/* The .tap fills the cell, so the global :focus-visible ring (outward offset) would clip
+	   at the viewport edge — inset it so the keyboard-focus indicator is actually visible. (#4) */
+	.tap:focus-visible {
+		outline-offset: -4px;
+	}
+
 	.tap-hint {
 		position: absolute;
 		inset: 0;
@@ -523,8 +302,8 @@
 		text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
 	}
 
-	/* Bottom seek bar: a tall transparent touch strip with a thin visible track,
-	   sitting above the full-bleed tap target so scrubbing doesn't toggle play. */
+	/* Bottom seek bar: a tall transparent touch strip with a thin visible track, above the
+	   full-bleed tap target so scrubbing doesn't toggle play. */
 	.seek {
 		position: absolute;
 		left: 0;

@@ -9,7 +9,7 @@
 //     the `:ro` VIDEO_DIR.
 //
 // The path derivation is pure (takes `dataDir` explicitly) so it's unit-testable
-// in isolation, mirroring forya's resolveRange/feedWindow/pickFit discipline.
+// in isolation, mirroring forya's resolveRange/pool/pickFit discipline.
 // Writes are atomic (tmp + rename) and validated before publish, so a crash or a
 // half/zero-byte artifact is never served. Nothing here ever throws — a cache
 // miss/failure simply degrades to "regenerate next time".

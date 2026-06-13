@@ -12,7 +12,6 @@
 	// offline-safe (no runtime icon CDN).
 	import Volume2 from '@lucide/svelte/icons/volume-2';
 	import VolumeX from '@lucide/svelte/icons/volume-x';
-	import Repeat from '@lucide/svelte/icons/repeat';
 	import SkipForward from '@lucide/svelte/icons/skip-forward';
 	import Share from '@lucide/svelte/icons/share';
 	import Info from '@lucide/svelte/icons/info';
@@ -57,22 +56,17 @@
 		{/if}
 	</button>
 
-	<!-- Loop/next mode: lit when "Next" (the non-default mode) is active, and the
-	     label spells out the CURRENT mode so it's unambiguous what's playing. -->
+	<!-- Autoplay-next toggle: a single SKIP icon, always (no glyph-swap). State is conveyed by
+	     the white `.on` styling when enabled + the toast on toggle — the text label and the
+	     loop-glyph swap were redundant (operator, #482). -->
 	<button
-		class="rail-btn mode-btn"
+		class="rail-btn"
 		class:on={autoAdvance}
 		onclick={onautoadvance}
-		aria-label={autoAdvance ? 'Autoplay next is on' : 'Loop is on'}
+		aria-label={autoAdvance ? 'Autoplay next is on' : 'Autoplay next is off'}
 		aria-pressed={autoAdvance}
 	>
-		{#if autoAdvance}
-			<SkipForward size={22} aria-hidden="true" />
-			<span class="mode-label">Next</span>
-		{:else}
-			<Repeat size={22} aria-hidden="true" />
-			<span class="mode-label">Loop</span>
-		{/if}
+		<SkipForward size={24} aria-hidden="true" />
 	</button>
 
 	<button class="rail-btn" onclick={onshare} aria-label="Share or save this video">
@@ -123,22 +117,6 @@
 		backdrop-filter: blur(8px);
 	}
 
-	/* The mode button carries a label under its icon, so it's a taller pill. */
-	.mode-btn {
-		flex-direction: column;
-		gap: 0.1rem;
-		height: auto;
-		padding: 0.5rem 0;
-		border-radius: 1.375rem;
-	}
-
-	.mode-label {
-		font-size: 0.6rem;
-		font-weight: 600;
-		line-height: 1;
-		letter-spacing: 0.02em;
-	}
-
 	.rail-btn.on {
 		background: rgba(255, 255, 255, 0.85);
 		color: #000;
@@ -146,5 +124,15 @@
 
 	.rail-btn:active {
 		transform: scale(0.92);
+	}
+
+	/* Rounded keyboard-focus ring (the global square :focus-visible outline reads wrong on a
+	   50%-radius button); box-shadow follows the border-radius. Double ring stays visible on
+	   any underlying frame. (#4) */
+	.rail-btn:focus-visible {
+		outline: none;
+		box-shadow:
+			0 0 0 2px #000,
+			0 0 0 4px #fff;
 	}
 </style>

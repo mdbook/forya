@@ -7,12 +7,10 @@ const muteKey = (feedName: string) => `forya:${feedName}:mute`;
 const infoKey = (feedName: string) => `forya:${feedName}:info`;
 const autoAdvanceKey = (feedName: string) => `forya:${feedName}:autoadvance`;
 
-/** Load the persisted mute preference (defaults to muted — iOS autoplay rule). */
-export function loadMute(feedName: string): boolean {
-	if (!browser) return true;
-	const v = localStorage.getItem(muteKey(feedName));
-	return v === null ? true : v === '1';
-}
+// NOTE (0.6.0): there is no loadMute — Feed starts every session "paused-but-unmuted"
+// (onMount sets muted=false; the first tap blesses + plays with sound), so a persisted
+// mute pref is never read back. saveMute is kept only so the toggle's runtime state is
+// written (harmless); honoring it on load is a deferred behavior choice, not a bug.
 
 /** Persist the mute preference. */
 export function saveMute(feedName: string, muted: boolean): void {

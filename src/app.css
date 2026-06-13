@@ -50,3 +50,27 @@ body {
 	padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
 		env(safe-area-inset-left);
 }
+
+/* Keyboard focus indicator (WCAG 2.4.7) — keyboard-only (:focus-visible), so a pointer tap
+   on the full-bleed play target never flashes a ring. The first Tab lands on that .tap
+   button; VideoCard insets its ring (the element is full-bleed) so it isn't clipped. */
+:focus-visible {
+	outline: 2px solid #fff;
+	outline-offset: 2px;
+}
+
+/* Honor prefers-reduced-motion: drop the smooth snap-scroll, the poster/video reveal
+   cross-fades, the scale tap-feedback, and the buffering spinner's spin. scrollIntoView
+   smoothness is additionally gated in JS (scrollTo). */
+@media (prefers-reduced-motion: reduce) {
+	.feed {
+		scroll-behavior: auto;
+	}
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.001ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.001ms !important;
+	}
+}

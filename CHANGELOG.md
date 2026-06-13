@@ -4,6 +4,82 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.6.0 — sound-on carry via a pooled `<video>` rearchitecture
+
+The headline feature: **turn sound on once and it carries** — across scrolls
+**and** across programmatic auto-advance — which the old fresh-`<video>`-per-card
+design could never do on iOS. Root insight (harness-proven on iOS 26.5.1): iOS's
+"may-play-unmuted" grant is **per-element, durable, and survives `src` swaps**. So
+`Feed` now owns a small fixed **pool** of persistent `<video>` elements
+(`POOL_SIZE = 3`, prev/cur/next) and reparents + `src`-recycles them across cards
+instead of mounting one per card. A pool blessed once in a gesture carries sound
+through every later card and auto-advance. Decoder count is bounded by the pool
+(3) — fewer than the old windowed ~6.
+
+The always-muted cure (0.5.5) is preserved as a hard invariant: **no `<video>`
+ever does an ungestured unmuted `play()`.** The feed starts "paused-but-unmuted" —
+the first tap is a genuine in-gesture play that mints the per-element grant.
+
+### Added
+
+- **Pooled `<video>` play machine** — pure, tested coverage/recycle math in
+  `src/lib/pool.ts`; `Feed.svelte` owns the elements. `VideoCard` is now a
+  presentation shell (poster / reveal / seek / tap), no `<video>`.
+- **Sound carries card→card and across auto-advance** after one sound-on tap.
+- **First-MB prewarm** — a side-channel `Range: bytes=0-1048575` fetch warms each
+  covered card's moov + first GOPs into the HTTP cache (faster first paint,
+  notably on slower links); superseded prewarms abort on a fast flick.
+- **Desktop a11y** — keyboard `:focus-visible` rings, `prefers-reduced-motion`
+  honored (scroll + cross-fades + spinner), the global Space handler no longer
+  shadows a focused control, and the seek slider announces a time readout.
+- **Auto-advance skips an errored card** (404 / decode-fail) instead of dead-
+  ending, capped (3 consecutive, reset on a successful play) so an all-broken feed
+  can't cascade.
+
+### Fixed / changed
+
+- Rotation/resize now re-fits already-parked pooled videos (was: only on a
+  `src`-swap), so a portrait clip no longer stays mis-letterboxed after rotate.
+
+### Removed
+
+- Dead code: `src/lib/window.ts` + `feedWindow` (superseded by `pool.ts`
+  coverage), `loadMute` (the feed starts unmuted by design), and the unused
+  `shouldGestureUnlock` export (its logic lives inline in `Feed.onTouchEnd`).
+
+### Known issues
+
+- **First-card two-tap (tracked for 0.6.1).** Turning sound on for the very first
+  (cold) card can need a second tap while it buffers. It's a **documented WebKit
+  policy** — unmuting a paused, fully-buffered idle element off gesture-driven
+  playback is refused; on the LAN the element is ~always buffered at tap (a
+  prewarm-off A/B confirmed prewarm is not the cause). Sound carries cleanly once
+  started. The fix (muted-play-then-unmute in-gesture) is a core-bless rewrite
+  needing on-device confirmation — deferred. See `two-tap-investigation.md`.
+- **Silent/ringer switch.** On iOS the hardware silent switch mutes inline video
+  audio regardless of a valid unmute — a platform constraint, not a bless bug.
+
+## 0.5.5 — always-muted autoplay (fixes the residual iOS autoplay break)
+
+Root-caused the residual every-~8-videos autoplay break: it was **unmuted
+autoplay**. iOS Safari only grants gesture-free autoplay to a **muted** element;
+once the user turned sound on, the persisted preference was applied to every
+card's autoplay (`v.muted = muted`), so each fresh card did an _unmuted_ `play()`
+→ `NotAllowedError` → autoplay revoked document-wide until a gesture. (Confirmed
+on-device: a muted feed scrolls infinitely with zero breaks; the instrumentation
+overlay pinned the reject as `NotAllowedError`, not decode/resource/readiness.)
+
+### Fixed
+
+- **Autoplay is now ALWAYS muted** (`VideoCard.tryPlay` sets `v.muted = true`
+  unconditionally), so it's gesture-free and never trips `NotAllowedError`. The
+  persisted sound preference no longer reaches a fresh autoplay — restoring the
+  criterion-3 gesture-free-muted-autoplay contract.
+- **Sound-on is honored by unmuting only the ACTIVE card, inside a gesture**
+  (`toggleMute`, and the `touchend` handler so sound carries across scrolls) — a
+  property set on an already-playing element, never a `play()`, so it can't
+  re-trip the gate. The mute `$effect` no longer reactively unmutes.
+
 ## 0.5.4 — gesture-unlock two-tap fix + playback instrumentation
 
 Fixes the two-tap regression 0.5.3 introduced, and adds a dark-by-default
