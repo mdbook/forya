@@ -45,6 +45,25 @@ export function isMediaReady(readyState: number): boolean {
 	return readyState >= HAVE_CURRENT_DATA;
 }
 
+/** `HTMLMediaElement.readyState`: enough data buffered to play FORWARD, not just
+ *  the current frame. `canplay` fires at this level. */
+export const HAVE_FUTURE_DATA = 3;
+
+/**
+ * Is the media ready to START an AUTOMATIC (non-gesture) play without tripping
+ * iOS's muted-autoplay policy? (0.5.4) Instrumentation showed the every-~8 break
+ * is a `NotAllowedError` policy reject on a COLD activation `play()`. A play() at
+ * only `HAVE_CURRENT_DATA` (2 — a single decoded frame) can still be rejected as
+ * un-sustainable, so the safe threshold is `HAVE_FUTURE_DATA` (3, "can play
+ * forward"). The activation eager-play AND the `canplay`/`loadeddata` self-heal
+ * both gate on this, so the first automatic play always lands on a forward-
+ * playable element. Gesture-driven plays (tap, gesture-unlock) are NOT gated —
+ * a user gesture grants permission regardless of buffer level.
+ */
+export function canStartPlayback(readyState: number): boolean {
+	return readyState >= HAVE_FUTURE_DATA;
+}
+
 /**
  * Should Feed's gesture handler fire a synchronous `play()` on the active card?
  *
