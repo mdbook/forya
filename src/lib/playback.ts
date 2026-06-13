@@ -56,32 +56,3 @@ export const HAVE_CURRENT_DATA = 2;
 export function isMediaReady(readyState: number): boolean {
 	return readyState >= HAVE_CURRENT_DATA;
 }
-
-/**
- * Should Feed's gesture handler fire a synchronous `play()` on the active card?
- *
- * On iOS a single muted-`play()` rejection (the ~1/8 trigger) revokes autoplay
- * permission for the WHOLE document until a real user gesture — after which every
- * programmatic `play()` rejects, INCLUDING the 0.5.1 self-heal (the block is
- * gesture-level, not buffer-level). The only cure is a `play()` call running
- * SYNCHRONOUSLY inside a user gesture's call stack, which re-grants permission
- * document-wide; the active card then plays and every later card autoplays again
- * ("one tap unlocks all"). This decides whether to fire that in-gesture retry:
- * only when the active card is currently autoplay-`blocked`.
- *
- * Deliberately NOT keyed on a user pause — `blocked` (autoplay rejected) is a
- * distinct flag from `paused` (the user tapped to pause), so the gesture-unlock
- * can never fight an intentional pause. Pure; the caller still performs the
- * actual in-gesture `play()` (a later microtask/$effect would NOT be in the
- * gesture stack and iOS would still reject).
- *
- * `moved` (0.5.4): the gesture must have been a real scroll-drag, NOT a stationary
- * tap. A discrete tap is already handled by VideoCard's `togglePlay` (which itself
- * plays in-gesture); firing the unlock on a tap too double-drives the play() and
- * the tap's synthesized `click` → `togglePlay` then PAUSES it (the 0.5.3 two-tap
- * regression). So the unlock fires only on a touch that actually moved — the
- * scroll-recovery case it exists for.
- */
-export function shouldGestureUnlock(s: { activeBlocked: boolean; moved: boolean }): boolean {
-	return s.activeBlocked && s.moved;
-}

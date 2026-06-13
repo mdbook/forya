@@ -4,12 +4,7 @@
 // table here is the whole policy surface; the component just wires it to
 // canplay/loadeddata and guards the attempt with its generation token.
 import { describe, expect, it } from 'vitest';
-import {
-	HAVE_CURRENT_DATA,
-	isMediaReady,
-	shouldGestureUnlock,
-	shouldRetryOnPlayable
-} from '../src/lib/playback';
+import { HAVE_CURRENT_DATA, isMediaReady, shouldRetryOnPlayable } from '../src/lib/playback';
 
 const base = { active: true, paused: false, hasPlayed: false, errored: false, blessed: true };
 
@@ -61,23 +56,5 @@ describe('isMediaReady (decoder-handover-race vs late-buffer)', () => {
 	it('treats below HAVE_CURRENT_DATA as not-yet-buffered (leave it to canplay)', () => {
 		expect(isMediaReady(0)).toBe(false); // HAVE_NOTHING
 		expect(isMediaReady(1)).toBe(false); // HAVE_METADATA
-	});
-});
-
-describe('shouldGestureUnlock (0.5.3/0.5.4 — document-wide iOS autoplay re-grant)', () => {
-	it('fires on a real scroll-drag when the active card is autoplay-blocked', () => {
-		expect(shouldGestureUnlock({ activeBlocked: true, moved: true })).toBe(true);
-	});
-
-	it('does NOT fire when the active card is playing fine (no permission revoked)', () => {
-		expect(shouldGestureUnlock({ activeBlocked: false, moved: true })).toBe(false);
-	});
-
-	it('does NOT fire on a stationary tap (0.5.4 — togglePlay owns taps; firing here double-drives → the two-tap regression)', () => {
-		expect(shouldGestureUnlock({ activeBlocked: true, moved: false })).toBe(false);
-	});
-
-	it('requires BOTH blocked and moved', () => {
-		expect(shouldGestureUnlock({ activeBlocked: false, moved: false })).toBe(false);
 	});
 });
