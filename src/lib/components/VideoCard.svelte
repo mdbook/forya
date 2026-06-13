@@ -27,7 +27,9 @@
 		posters,
 		onfinished,
 		onready,
-		onblocked
+		onblocked,
+		debug = false,
+		ondebug
 	}: {
 		item: FeedItem;
 		active: boolean;
@@ -50,7 +52,19 @@
 		 *  iOS's document-wide autoplay permission with a synchronous in-gesture
 		 *  `play()`. Distinct from a user pause, so it never fights one. */
 		onblocked?: (blocked: boolean) => void;
+		/** Diagnostic flag (0.5.4, DEBUG_PLAYBACK). When false (default) NO debug
+		 *  events are emitted — entirely inert in prod. */
+		debug?: boolean;
+		/** Diagnostic sink (0.5.4): emits playback events (try / reject+err.name /
+		 *  error+code / play) so Feed's debug overlay can show the sequence at the
+		 *  ~every-8 break. Only called when `debug` is true. */
+		ondebug?: (kind: string, detail?: string) => void;
 	} = $props();
+
+	/** Emit a diagnostic playback event (0.5.4) — no-op unless `debug` is on. */
+	function dbg(kind: string, detail?: string) {
+		if (debug) ondebug?.(kind, detail);
+	}
 
 	let el = $state<HTMLVideoElement>();
 	// `hasPlayed` gates the REVEAL (0.3.1): the <video> only becomes visible once
@@ -169,6 +183,7 @@
 		// can't keep firing on top of the next card. `AbortError` (a pause- or
 		// load-interrupted play) is benign and never marks the card blocked.
 		const gen = ++playGen;
+		dbg('try');
 		v.muted = muted;
 		const p = v.play();
 		if (!p || typeof p.then !== 'function') return;
@@ -186,6 +201,7 @@
 					.catch((err2: unknown) => {
 						if (gen !== playGen || !active) return;
 						if (err2 instanceof DOMException && err2.name === 'AbortError') return;
+						dbg('reject', err2 instanceof DOMException ? err2.name : 'err');
 						// Still failing after the rAF retry → surface tap-to-play, but DON'T
 						// release the decoder (0.5.1): usually just a not-yet-buffered card the
 						// feed scrolled to, so keep `src` and let `canplay`/`loadeddata` re-attempt
@@ -329,6 +345,7 @@
 			released = true;
 			errored = true;
 			if (active) blocked = true;
+			dbg('error', el?.error ? `code${el.error.code}` : 'err');
 		}}
 		onplay={() => {
 			paused = false;
@@ -339,6 +356,7 @@
 			buffering = false;
 			blocked = false;
 			if (active) onready?.();
+			dbg('play');
 		}}
 	></video>
 

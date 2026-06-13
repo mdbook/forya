@@ -207,9 +207,14 @@ is operator-on-device, criterion 3):
   gesture's call stack**, which re-grants permission document-wide ("one tap unlocks
   all"). `Feed` adds two **passive** listeners on the scroll container — `touchend`
   (NOT `pointerup`: a scroll-fling fires `pointercancel` and stops pointer events,
-  exactly the failing case) + `click` (desktop/discrete tap) — that call
-  `activeVideo().play()` only when the active card is `blocked`
-  (`shouldGestureUnlock`, pure + tested). `VideoCard` reports its blocked state up
+  exactly the failing case) — that call `activeVideo().play()` only when the active
+  card is `blocked` AND the touch actually moved (`shouldGestureUnlock({ activeBlocked,
+moved })`, pure + tested). **0.5.4 fixed a two-tap regression here:** the original
+  also keyed a container `click`, so a stationary tap fired the unlock's `play()`
+  (via `touchend`) and then the synthesized `click` → `togglePlay` paused it again →
+  two taps to recover. The fix gates the unlock on real scroll movement (>10px) and
+  drops the `click` arm, so taps go through `togglePlay` alone (one tap) and the
+  unlock is purely the scroll-recovery path. `VideoCard` reports its blocked state up
   via a new `onblocked` callback (emitted only while active); `Feed` tracks
   `activeBlocked`, **reset to false on every active-index change** so a stale
   scrolled-past `blocked` can't mis-fire. Active-card-only by design — the in-gesture

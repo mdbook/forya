@@ -7,7 +7,12 @@ RUN npm run build && npm prune --omit=dev
 
 FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
 WORKDIR /app
-ENV NODE_ENV=production PORT=3000 HOST=0.0.0.0 VIDEO_DIR=/srv/videos FEED_NAME=feed
+# Build provenance (0.5.4): CI passes the commit SHA via `--build-arg BUILD_SHA`;
+# baked as a runtime ENV so config.ts can surface it in the DEBUG_PLAYBACK overlay
+# (`build=<sha8>`). Empty for a plain local build. Diagnostic only — never affects
+# behaviour; the overlay that reads it is itself dark by default.
+ARG BUILD_SHA=""
+ENV NODE_ENV=production PORT=3000 HOST=0.0.0.0 VIDEO_DIR=/srv/videos FEED_NAME=feed BUILD_SHA=$BUILD_SHA
 # ffmpeg/ffprobe for the optional poster + metadata subsystem (0.5). Only ever
 # spawned when DATA_DIR is set; without it the feature is fully dark (the binary
 # is then just dead weight — acceptable for one image across all configs). ffmpeg

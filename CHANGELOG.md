@@ -4,6 +4,30 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.5.4 — gesture-unlock two-tap fix + playback instrumentation
+
+Fixes the two-tap regression 0.5.3 introduced, and adds a dark-by-default
+diagnostic overlay used to chase the residual iOS autoplay break. Frontend only;
+the serving layer is byte-untouched.
+
+### Fixed
+
+- **Two-tap recovery regression (0.5.3):** the gesture-unlock listener fired on a
+  stationary tap as well as a scroll, so a tap would `play()` (via `touchend`) and
+  then the synthesized `click` → `togglePlay` would immediately `pause()` it —
+  needing a second tap. The unlock now fires only on a real scroll-drag
+  (`touchMoved` > 10px); a tap is handled solely by `togglePlay` (which already
+  plays in-gesture). The redundant container `click` listener is dropped.
+  `shouldGestureUnlock` now takes `{ activeBlocked, moved }` (pure + tested).
+
+### Added
+
+- **`DEBUG_PLAYBACK` diagnostic overlay (default OFF, inert in prod):** when set,
+  surfaces a live `<video>`/readyState count + a rolling per-card play-event log
+  (attempt / reject + `err.name` / error + code / playing) and the build SHA
+  (`build=<sha8>`, baked via the Dockerfile `BUILD_SHA` arg ← CI). A diagnostic
+  aid for the autoplay investigation; never enabled on a release deploy.
+
 ## 0.5.3 — gesture-unlock autoplay recovery + poster cross-fade
 
 Fixes the **document-wide** iOS autoplay break the operator reproduced on-device

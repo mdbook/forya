@@ -44,6 +44,18 @@ export const config = {
 	 *  build without it (the source `VIDEO_DIR` stays `:ro` regardless). Set = forya
 	 *  generates + caches posters/metadata under here, writing ONLY here. */
 	dataDir: env.DATA_DIR ?? '',
+	/** Diagnostic playback overlay (0.5.4 instrumentation). Default OFF → entirely
+	 *  inert in prod (the overlay is gated client-side on this flag and emits no
+	 *  events when off). Set `DEBUG_PLAYBACK=1` on an instance to surface a live
+	 *  `<video>`/readyState count + a rolling per-card play-event log (attempt /
+	 *  reject+err.name / error+code / playing) — to pin the every-~8 autoplay break
+	 *  mechanism on-device. Diagnostic only; never enabled on a release deploy. */
+	debugPlayback: parseBool(env.DEBUG_PLAYBACK, false),
+	/** Build commit SHA, baked at image build (Dockerfile ARG ← CI `--build-arg
+	 *  BUILD_SHA=$CI_COMMIT_SHA`). Empty for a plain local build. Surfaced ONLY in
+	 *  the DEBUG_PLAYBACK overlay (`build=<sha8>`) so a diagnostic deploy is
+	 *  unambiguous about which build is running — never shown in normal use. */
+	buildSha: env.BUILD_SHA ?? '',
 	// PORT/HOST are consumed natively by adapter-node at startup; surfaced here
 	// for completeness and any app-level use.
 	port: parseInt10(env.PORT, 3000),

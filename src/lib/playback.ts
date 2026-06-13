@@ -62,7 +62,14 @@ export function isMediaReady(readyState: number): boolean {
  * can never fight an intentional pause. Pure; the caller still performs the
  * actual in-gesture `play()` (a later microtask/$effect would NOT be in the
  * gesture stack and iOS would still reject).
+ *
+ * `moved` (0.5.4): the gesture must have been a real scroll-drag, NOT a stationary
+ * tap. A discrete tap is already handled by VideoCard's `togglePlay` (which itself
+ * plays in-gesture); firing the unlock on a tap too double-drives the play() and
+ * the tap's synthesized `click` → `togglePlay` then PAUSES it (the 0.5.3 two-tap
+ * regression). So the unlock fires only on a touch that actually moved — the
+ * scroll-recovery case it exists for.
  */
-export function shouldGestureUnlock(s: { activeBlocked: boolean }): boolean {
-	return s.activeBlocked;
+export function shouldGestureUnlock(s: { activeBlocked: boolean; moved: boolean }): boolean {
+	return s.activeBlocked && s.moved;
 }

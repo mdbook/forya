@@ -211,19 +211,64 @@
 	}
 
 	// Gesture-unlock (0.5.3) — the document-wide iOS autoplay-revocation recovery.
-	// On iOS a single muted-play() rejection (~1/8 cards) revokes autoplay for the
-	// WHOLE document until a real user gesture; thereafter every programmatic
-	// play() rejects, including the 0.5.1 self-heal. So when the active card is
-	// `blocked`, re-attempt play() SYNCHRONOUSLY inside the next user gesture — being
-	// in the gesture's call stack is exactly what re-grants iOS permission (a later
-	// microtask/$effect would not). That one in-gesture play() re-activates the doc;
-	// the card's own onplay/onplaying then clear `blocked`, and every later card
-	// autoplays again via its normal IO path ("one tap unlocks all"). Only fires
-	// when `activeBlocked` (never on a healthy card, and never over a user pause —
-	// `paused` is a separate flag), so on a clean card it's a no-op; on a deliberate
-	// tap it harmlessly races VideoCard's own togglePlay.
+	// On iOS a single muted-play() rejection revokes autoplay for the WHOLE document
+	// until a real user gesture; thereafter every programmatic play() rejects,
+	// including the 0.5.1 self-heal. So when the active card is `blocked`, re-attempt
+	// play() SYNCHRONOUSLY inside the next user gesture — being in the gesture's call
+	// stack is exactly what re-grants iOS permission (a later microtask/$effect would
+	// not). That one in-gesture play() re-activates the doc; the card's own
+	// onplay/onplaying then clear `blocked`, and every later card autoplays again via
+	// its normal IO path ("one tap unlocks all").
+	//
+	// 0.5.4: fire ONLY on a touch that actually MOVED (a scroll-drag) — `touchMoved`.
+	// A stationary tap is already handled by VideoCard's `togglePlay` (which plays
+	// in-gesture itself); firing here on a tap too double-drove the play(), and the
+	// tap's synthesized `click` → `togglePlay` then PAUSED it — the 0.5.3 two-tap
+	// regression. So this is now the pure SCROLL-recovery path; taps go through
+	// togglePlay alone (one tap). Never fights a user pause (`paused` is separate
+	// from `blocked`); a no-op on a healthy card.
+	let touchStartY = 0;
+	let touchMoved = false;
+
+	// 0.5.4 diagnostic overlay — inert unless `settings.debugPlayback` (DEBUG_PLAYBACK).
+	// `debugLog` is a small ring buffer of per-card playback events (try / reject+
+	// err.name / error+code / play) emitted by VideoCard; `debugCounts` samples the
+	// live `<video>`/readyState population from the DOM. Together they pin the
+	// every-~8 break: whether the rejection is `NotAllowedError` (permission) or a
+	// decode/resource error, and whether decoders climb past the window.
+	let debugLog = $state<string[]>([]);
+	let debugCounts = $state('');
+	let debugTimer: ReturnType<typeof setInterval> | undefined;
+	let debugSeq = 0;
+
+	function pushDebug(idx: number, kind: string, detail?: string) {
+		debugSeq++;
+		const line = `${debugSeq} ${idx}:${kind}${detail ? `(${detail})` : ''}`;
+		debugLog = [...debugLog.slice(-13), line];
+	}
+
+	function sampleDebug() {
+		if (typeof document === 'undefined') return;
+		const vids = document.getElementsByTagName('video');
+		let data = 0;
+		for (const v of vids) if (v.readyState >= 2) data++;
+		const sha = settings.buildSha ? settings.buildSha.slice(0, 8) : 'local';
+		debugCounts = `build=${sha} live=${vids.length} data=${data} active=${activeIndex} blk=${activeBlocked ? 1 : 0}`;
+	}
+
+	function onTouchStart(e: TouchEvent) {
+		touchStartY = e.touches[0]?.clientY ?? 0;
+		touchMoved = false;
+	}
+
+	function onTouchMove(e: TouchEvent) {
+		if (Math.abs((e.touches[0]?.clientY ?? touchStartY) - touchStartY) > 10) {
+			touchMoved = true;
+		}
+	}
+
 	function gestureUnlock() {
-		if (!shouldGestureUnlock({ activeBlocked })) return;
+		if (!shouldGestureUnlock({ activeBlocked, moved: touchMoved })) return;
 		activeVideo()
 			?.play()
 			.catch(() => {});
@@ -304,22 +349,33 @@
 
 		for (const el of cardEls) if (el) io.observe(el);
 
-		// Gesture-unlock listeners (0.5.3): re-grant iOS autoplay on the next real
-		// touch when the active card is blocked. `touchend` (NOT pointerup — a
-		// scroll-fling fires pointercancel and stops sending pointer events, exactly
-		// the case we target) fires on finger-lift even after a scroll; `click` covers
-		// the desktop/discrete-tap path. Both PASSIVE — no preventDefault, zero scroll
-		// interference. `gestureUnlock` self-guards on `activeBlocked`.
+		// Gesture-unlock listeners (0.5.3, refined 0.5.4): re-grant iOS autoplay on a
+		// scroll-drag that lands on a blocked card. `touchstart`/`touchmove` track
+		// whether the touch actually moved; `touchend` (NOT pointerup — a scroll-fling
+		// fires pointercancel and stops sending pointer events) fires the unlock only
+		// when it did (`gestureUnlock` guards on `touchMoved`). All PASSIVE — no
+		// preventDefault, zero scroll interference. The `click` arm was DROPPED in
+		// 0.5.4: taps are owned by VideoCard's `togglePlay`, and the extra arm caused
+		// the two-tap regression.
+		feedEl?.addEventListener('touchstart', onTouchStart, { passive: true });
+		feedEl?.addEventListener('touchmove', onTouchMove, { passive: true });
 		feedEl?.addEventListener('touchend', gestureUnlock, { passive: true });
-		feedEl?.addEventListener('click', gestureUnlock, { passive: true });
+
+		// 0.5.4: sample the live <video> population for the debug overlay (off in prod).
+		if (settings.debugPlayback) {
+			sampleDebug();
+			debugTimer = setInterval(sampleDebug, 500);
+		}
 
 		return () => {
 			io?.disconnect();
+			feedEl?.removeEventListener('touchstart', onTouchStart);
+			feedEl?.removeEventListener('touchmove', onTouchMove);
 			feedEl?.removeEventListener('touchend', gestureUnlock);
-			feedEl?.removeEventListener('click', gestureUnlock);
 			clearTimeout(undoTimer);
 			clearTimeout(modeTimer);
 			clearTimeout(copyTimer);
+			clearInterval(debugTimer);
 		};
 	});
 
@@ -388,6 +444,8 @@
 						onfinished={() => scrollTo(activeIndex + 1)}
 						onready={() => (activeReady = true)}
 						onblocked={(b) => (activeBlocked = b)}
+						debug={settings.debugPlayback}
+						ondebug={(kind, detail) => pushDebug(i, kind, detail)}
 					/>
 				{:else}
 					<div class="card-rest">
@@ -435,6 +493,15 @@
 
 {#if copyToast}
 	<div class="mode-toast" role="status">Copied ID ✓</div>
+{/if}
+
+{#if settings.debugPlayback}
+	<div class="debug-overlay" aria-hidden="true">
+		<div class="debug-counts">{debugCounts}</div>
+		{#each debugLog as line (line)}
+			<div>{line}</div>
+		{/each}
+	</div>
 {/if}
 
 <style>
@@ -561,6 +628,32 @@
 
 	.undo-btn:active {
 		transform: scale(0.95);
+	}
+
+	/* 0.5.4 diagnostic overlay — only rendered when DEBUG_PLAYBACK is on. Top-left,
+	   monospace, pinned above content; pointer-events:none so it never intercepts
+	   scroll/tap. Never shown on a release deploy. */
+	.debug-overlay {
+		position: fixed;
+		top: calc(env(safe-area-inset-top) + 0.25rem);
+		left: 0.25rem;
+		z-index: 50;
+		max-width: 60vw;
+		padding: 0.35rem 0.5rem;
+		font-family: ui-monospace, monospace;
+		font-size: 0.62rem;
+		line-height: 1.25;
+		color: #9effa0;
+		background: rgba(0, 0, 0, 0.62);
+		border-radius: 0.35rem;
+		pointer-events: none;
+		white-space: pre;
+	}
+
+	.debug-counts {
+		color: #fff;
+		font-weight: 700;
+		margin-bottom: 0.15rem;
 	}
 
 	.mode-toast {

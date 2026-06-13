@@ -54,12 +54,20 @@ describe('isMediaReady (decoder-handover-race vs late-buffer)', () => {
 	});
 });
 
-describe('shouldGestureUnlock (0.5.3 — document-wide iOS autoplay re-grant)', () => {
-	it('fires the in-gesture play() when the active card is autoplay-blocked', () => {
-		expect(shouldGestureUnlock({ activeBlocked: true })).toBe(true);
+describe('shouldGestureUnlock (0.5.3/0.5.4 — document-wide iOS autoplay re-grant)', () => {
+	it('fires on a real scroll-drag when the active card is autoplay-blocked', () => {
+		expect(shouldGestureUnlock({ activeBlocked: true, moved: true })).toBe(true);
 	});
 
 	it('does NOT fire when the active card is playing fine (no permission revoked)', () => {
-		expect(shouldGestureUnlock({ activeBlocked: false })).toBe(false);
+		expect(shouldGestureUnlock({ activeBlocked: false, moved: true })).toBe(false);
+	});
+
+	it('does NOT fire on a stationary tap (0.5.4 — togglePlay owns taps; firing here double-drives → the two-tap regression)', () => {
+		expect(shouldGestureUnlock({ activeBlocked: true, moved: false })).toBe(false);
+	});
+
+	it('requires BOTH blocked and moved', () => {
+		expect(shouldGestureUnlock({ activeBlocked: false, moved: false })).toBe(false);
 	});
 });
