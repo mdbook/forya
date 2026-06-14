@@ -1,90 +1,13 @@
-import { error } from '@sveltejs/kit';
-import fs from 'node:fs';
-import fsp from 'node:fs/promises';
-import { Readable } from 'node:stream';
 import type { RequestHandler } from './$types';
-import { config } from '$lib/server/config';
-import { mimeFromExt, resolveRange, safeMediaPath, weakETag } from '$lib/server/videos';
+import { serve } from '$lib/server/mediaServe';
 
 // GET|HEAD /api/media/[name] — the Range-correct serving endpoint (SPEC §3).
-// iOS will not play or seek without proper 206 + Content-Range + Accept-Ranges,
-// so the byte math lives in videos.ts (resolveRange, unit-tested) and this
-// handler is a thin wrapper: safe-resolve → stat → resolve range → stream.
-//
-// HEAD mirrors what GET would return for the same request (same status +
-// headers, no body): a HEAD probe without Range → 200 full; a HEAD with Range
-// → 206 + Content-Range (this is what `curl -sI -r 0-1` hits — criterion 1).
-// A Range request is NEVER collapsed into a full 200.
-
-async function statFile(name: string) {
-	const full = safeMediaPath(name, config.videoDir);
-	if (full === null) error(404, 'not found'); // traversal / bad name → no leak
-	let st: fs.Stats;
-	try {
-		// lstat, NOT stat (adversarial #1): `stat` FOLLOWS a symlink, so a planted
-		// `clip.mp4 -> /etc/passwd` (an in-dir NAME whose TARGET escapes VIDEO_DIR) would
-		// pass the purely-lexical `safeMediaPath` and the byte path would stream the
-		// out-of-dir file with full Range support. `lstat` stats the LINK itself, so the
-		// symlink check below rejects it. Mirrors the poster route's F7 guard; the feed
-		// scan already excludes symlinks (videos.ts), so no legitimate item is one.
-		st = await fsp.lstat(full);
-	} catch {
-		error(404, 'not found');
-	}
-	// Regular file only — reject symlinks (and dirs/sockets/etc.) so the byte path can
-	// never follow a link out of the `:ro` VIDEO_DIR. For a regular file `lstat` === `stat`,
-	// so the size/mtime that feed resolveRange/weakETag/baseHeaders below are unchanged
-	// (serving-four stays byte-identical; this is a route-level guard, not a math change).
-	if (st.isSymbolicLink() || !st.isFile()) error(404, 'not found');
-	return { full, st };
-}
-
-function baseHeaders(name: string, st: fs.Stats): Record<string, string> {
-	return {
-		'accept-ranges': 'bytes',
-		'content-type': mimeFromExt(name),
-		'last-modified': st.mtime.toUTCString(),
-		etag: weakETag(st.size, st.mtimeMs),
-		// Purely additive: lets the browser reuse already-fetched bytes when
-		// scrolling back up (the windowed feed re-enters previous cards) without a
-		// revalidation round-trip. `private` because instances sit behind per-user
-		// forward-auth — never a shared proxy cache. The weak ETag/Last-Modified
-		// still drive revalidation once stale. Does NOT influence the Range branch
-		// logic below — the 206/Content-Range/Content-Length/416 contract is
-		// computed solely from resolveRange().
-		'cache-control': 'private, max-age=3600'
-	};
-}
-
-async function serve(name: string, rangeHeader: string | null, method: 'GET' | 'HEAD') {
-	const { full, st } = await statFile(name);
-	const headers = baseHeaders(name, st);
-	const isHead = method === 'HEAD';
-	const range = resolveRange(rangeHeader, st.size);
-
-	if (range.kind === 'unsatisfiable') {
-		return new Response(null, {
-			status: 416,
-			headers: { ...headers, 'content-range': `bytes */${st.size}` }
-		});
-	}
-
-	if (range.kind === 'partial') {
-		headers['content-range'] = `bytes ${range.start}-${range.end}/${st.size}`;
-		headers['content-length'] = String(range.length);
-		const body = isHead
-			? null
-			: (Readable.toWeb(
-					fs.createReadStream(full, { start: range.start, end: range.end })
-				) as ReadableStream);
-		return new Response(body, { status: 206, headers });
-	}
-
-	// full 200 — whole file streamed (never buffered into memory), or no body for HEAD
-	headers['content-length'] = String(st.size);
-	const body = isHead ? null : (Readable.toWeb(fs.createReadStream(full)) as ReadableStream);
-	return new Response(body, { status: 200, headers });
-}
+// iOS will not play or seek without proper 206 + Content-Range + Accept-Ranges.
+// The byte path (safe-resolve → lstat-guard → resolve range → stream) lives in
+// `$lib/server/mediaServe` so the unauth `/share/<token>/media` route shares the
+// IDENTICAL contract (incl. the 0.8.3 symlink guard); this handler is the thin
+// authed wrapper. A Range request is NEVER collapsed into a full 200; HEAD mirrors
+// GET (same status + headers, no body) — `curl -sI -r 0-1` → 206 (criterion 1).
 
 export const GET: RequestHandler = ({ params, request }) =>
 	serve(params.name, request.headers.get('range'), 'GET');
