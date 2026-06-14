@@ -121,19 +121,26 @@ export async function generateMeta(
 
 /**
  * ADDITIVELY enrich a page of feed items with cached metadata
- * (`width`/`height`/`duration`). Disabled (no DATA_DIR) → returns the SAME array
+ * (`width`/`height`/`duration`). Disabled (POSTERS off) → returns the SAME array
  * unchanged (identity, ZERO cache access) so the manifest is byte-identical.
  * Cache-READ-only: never spawns ffprobe, safe on the SSR/feed path. Bounded —
  * call on the PAGE being sent, not the whole library.
+ *
+ * 0.8.0: gates on `postersEnabled` (the POSTERS feature), NOT the bare DATA_DIR
+ * volume — so a feed with a volume for `starred` but POSTERS off keeps `enrichItems`
+ * as an identity no-op (no meta-cache read), and its feed payload stays byte-
+ * identical to the 0.7.0 cheap-scan output. `config.posters` implies a volume, so
+ * the `readMeta(dataDir)` path below only runs when `dataDir` is present.
  */
 export async function enrichItems(
 	items: FeedItem[],
-	dataDir: string = config.dataDir
+	dataDir: string = config.dataDir,
+	postersEnabled: boolean = config.posters
 ): Promise<FeedItem[]> {
-	if (!cacheEnabled(dataDir)) return items; // disabled → byte-identical
-	// Only reached when the cache is ON (DATA_DIR set) — the full-stat scan path,
-	// where `mtime` is always present (it's the cache key). `?? 0` is just the type
-	// guard for the now-optional field (0.7.0); it never fires on this path.
+	if (!postersEnabled) return items; // posters off → byte-identical
+	// Only reached when POSTERS is ON — the full-stat scan path, where `mtime` is
+	// always present (it's the cache key). `?? 0` is just the type guard for the
+	// now-optional field (0.7.0); it never fires on this path.
 	return Promise.all(
 		items.map(async (it) => {
 			const meta = await readMeta(it.name, it.mtime ?? 0, dataDir);

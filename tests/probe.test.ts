@@ -85,16 +85,18 @@ describe('enrichItems — additive + identity-when-disabled', () => {
 		await fsp.rm(dir, { recursive: true, force: true });
 	});
 
-	it('disabled → returns the SAME array unchanged (byte-identical manifest)', async () => {
+	it('disabled (posters off) → returns the SAME array unchanged (byte-identical manifest)', async () => {
 		const items = [item('a.mp4'), item('b.mp4')];
-		const out = await enrichItems(items, '');
+		// postersEnabled defaults to config.posters (false in the test env) → identity
+		// even though we pass a real dir — the POSTERS gate, not the bare volume.
+		const out = await enrichItems(items, dir, false);
 		expect(out).toBe(items); // identity — zero cache access, manifest untouched
 	});
 
-	it('enabled → ADDS width/height/duration for probed items only', async () => {
+	it('enabled (posters on) → ADDS width/height/duration for probed items only', async () => {
 		const runner: ProbeRunner = async () => PROBE_JSON;
 		await generateMeta('a.mp4', 1, '/x', runner, dir);
-		const out = await enrichItems([item('a.mp4', 1), item('b.mp4', 1)], dir);
+		const out = await enrichItems([item('a.mp4', 1), item('b.mp4', 1)], dir, true);
 		// a.mp4 was probed → enriched; b.mp4 not → unchanged base shape
 		expect(out[0]).toMatchObject({ name: 'a.mp4', width: 1080, height: 1920, duration: 12.5 });
 		expect(out[1].width).toBeUndefined();

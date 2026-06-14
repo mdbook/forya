@@ -52,8 +52,9 @@
 		onseek: (frac: number) => void;
 		/** Nudge the active card's pooled element by `delta` seconds (keyboard). */
 		onseekby: (delta: number) => void;
-		/** Tap the full-bleed target → Feed toggles play/pause on the active element. */
-		ontap: () => void;
+		/** Tap the full-bleed target → Feed toggles play/pause on the active element. The
+		 *  MouseEvent is forwarded so Feed can place the double-tap heart at the tap point. */
+		ontap: (e?: MouseEvent) => void;
 	} = $props();
 
 	// The manual play affordance shows for a blocked (autoplay-rejected) OR user-paused
@@ -281,6 +282,10 @@
 		background: transparent;
 		cursor: pointer;
 		appearance: none;
+		/* Kill the iOS double-tap-to-zoom on the tap target so the double-tap-to-favorite
+		   gesture (0.8.0) lands as two taps, not a zoom (the viewport has no
+		   user-scalable=no, and we don't want to disable pinch-zoom elsewhere). */
+		touch-action: manipulation;
 	}
 
 	/* The .tap fills the cell, so the global :focus-visible ring (outward offset) would clip

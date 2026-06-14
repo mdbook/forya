@@ -28,9 +28,13 @@ describe('worker — enqueueGeneration', () => {
 		await fsp.rm(dir, { recursive: true, force: true });
 	});
 
-	it('disabled (no dataDir) → no enqueue, no generation', async () => {
+	it('disabled (posters off) → no enqueue, no generation', async () => {
 		const m: ProbeRunner = vi.fn(async () => PROBE_JSON);
-		expect(enqueueGeneration('a.mp4', 1, '/x', { dataDir: '', metaRunner: m })).toBe(false);
+		// Gated on the POSTERS feature now (0.8.0), not the bare volume — so even with a
+		// DATA_DIR present, POSTERS off → no enqueue, no ffmpeg.
+		expect(
+			enqueueGeneration('a.mp4', 1, '/x', { dataDir: dir, postersEnabled: false, metaRunner: m })
+		).toBe(false);
 		expect(m).not.toHaveBeenCalled();
 	});
 
@@ -38,7 +42,12 @@ describe('worker — enqueueGeneration', () => {
 		const m: ProbeRunner = vi.fn(async () => PROBE_JSON);
 		const p: PosterRunner = vi.fn(async () => JPEG);
 		expect(
-			enqueueGeneration('a.mp4', 1, '/srv/a.mp4', { dataDir: dir, metaRunner: m, posterRunner: p })
+			enqueueGeneration('a.mp4', 1, '/srv/a.mp4', {
+				dataDir: dir,
+				postersEnabled: true,
+				metaRunner: m,
+				posterRunner: p
+			})
 		).toBe(true);
 		await _whenIdle();
 		expect(await readMeta('a.mp4', 1, dir)).toEqual({ width: 1080, height: 1920, duration: 5 });
@@ -50,7 +59,7 @@ describe('worker — enqueueGeneration', () => {
 	it('single-flights duplicate enqueues for the same key (one generation)', async () => {
 		const m: ProbeRunner = vi.fn(async () => PROBE_JSON);
 		const p: PosterRunner = vi.fn(async () => JPEG);
-		const opts = { dataDir: dir, metaRunner: m, posterRunner: p };
+		const opts = { dataDir: dir, postersEnabled: true, metaRunner: m, posterRunner: p };
 		expect(enqueueGeneration('a.mp4', 1, '/x', opts)).toBe(true);
 		expect(enqueueGeneration('a.mp4', 1, '/x', opts)).toBe(false); // already pending
 		await _whenIdle();
@@ -61,7 +70,7 @@ describe('worker — enqueueGeneration', () => {
 	it('a changed mtime is a distinct job, not deduped', async () => {
 		const m: ProbeRunner = vi.fn(async () => PROBE_JSON);
 		const p: PosterRunner = vi.fn(async () => JPEG);
-		const opts = { dataDir: dir, metaRunner: m, posterRunner: p };
+		const opts = { dataDir: dir, postersEnabled: true, metaRunner: m, posterRunner: p };
 		enqueueGeneration('a.mp4', 1, '/x', opts);
 		enqueueGeneration('a.mp4', 2, '/x', opts);
 		await _whenIdle();
@@ -73,7 +82,7 @@ describe('worker — enqueueGeneration', () => {
 	it('processes multiple distinct videos serially', async () => {
 		const m: ProbeRunner = vi.fn(async () => PROBE_JSON);
 		const p: PosterRunner = vi.fn(async () => JPEG);
-		const opts = { dataDir: dir, metaRunner: m, posterRunner: p };
+		const opts = { dataDir: dir, postersEnabled: true, metaRunner: m, posterRunner: p };
 		enqueueGeneration('a.mp4', 1, '/a', opts);
 		enqueueGeneration('b.mp4', 1, '/b', opts);
 		await _whenIdle();
