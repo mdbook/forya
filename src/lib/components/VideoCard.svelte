@@ -286,6 +286,15 @@
 		   gesture (0.8.0) lands as two taps, not a zoom (the viewport has no
 		   user-scalable=no, and we don't want to disable pinch-zoom elsewhere). */
 		touch-action: manipulation;
+		/* The play/pause "flicker" (0.8.1): this button is full-bleed (inset:0), so iOS
+		   Safari's default tap-highlight paints a translucent-black overlay over the WHOLE
+		   card on every press — a ~7% whole-video dim that appears on touch-down and reverts
+		   on release (a ~2-frame flash per tap; sustained while a finger is held). It rides
+		   the active press, not the play/pause state, which is why it fires on every tap.
+		   `transparent` removes the native highlight; purely presentational — no effect on
+		   the tap handler, the gesture, or playback. (Capture-confirmed: the dim is uniform
+		   across the whole video, not a scrim behind the ▶ affordance.) */
+		-webkit-tap-highlight-color: transparent;
 	}
 
 	/* The .tap fills the cell, so the global :focus-visible ring (outward offset) would clip

@@ -195,6 +195,22 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.8.1 — play/pause flicker fix (iOS tap-highlight)
+
+- **`-webkit-tap-highlight-color: transparent` on `.tap` is load-bearing — don't
+  drop it.** The full-bleed tap target is a `<button>`, so without it iOS Safari
+  paints a translucent-black tap-highlight over the _whole card_ on every press: a
+  ~7% whole-video dim on each tap (the long-hunted "flicker"). It rides the active
+  touch, not the play/pause state, so it fired on every tap and is invisible to a
+  JS tap-handler read. Don't re-introduce a default highlight on any full-bleed
+  press target.
+- **Lesson (capture-first).** Three source-guessed CSS fixes were falsified on
+  device before a 60fps capture + per-region luma pinned the real layer. Decider:
+  the dim is _uniform_ across the whole video (the far-left strip dims the same as
+  the center, ~×0.74 toward `#000`) → a full-bleed overlay, not a glyph-local
+  scrim behind the ▶. Demand a device capture / luma trace before a second blind
+  CSS guess on a visual bug.
+
 ## 0.8.0 — starred favorites + POSTERS/DATA_DIR decoupling + warm-on-boot
 
 - **`POSTERS` is now decoupled from `DATA_DIR` — load-bearing; updates the
