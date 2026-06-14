@@ -184,8 +184,18 @@
 		return s >= 0 ? pool[s] : null;
 	}
 
+	// 0.8.2 cropping fix: prefer the element's OWN intrinsic dims (videoWidth/Height) over the
+	// manifest's. The 0.7.0 cheap-scan feeds (favorite, + liked until POSTERS warms) carry NO
+	// width/height — so manifest-only `pickFit(0,0,…)` hit the unknown-dims guard and returned
+	// `cover`, top/bottom-cropping a portrait clip on a landscape/desktop viewport. The pooled
+	// <video> always knows its real dims once `loadedmetadata` fires; fall back to the manifest
+	// for the pre-metadata call (src-swap), then the loadedmetadata listener re-fits with truth.
 	function applyFit(v: HTMLVideoElement, item: FeedItem) {
-		const f = pickFit(item.width || 0, item.height || 0, viewportAR);
+		const f = pickFit(
+			v.videoWidth || item.width || 0,
+			v.videoHeight || item.height || 0,
+			viewportAR
+		);
 		v.classList.toggle('contain', f === 'contain');
 	}
 
@@ -1017,6 +1027,13 @@
 			});
 			v.addEventListener('loadedmetadata', () => {
 				if (s === activeSlot()) activeDuration = v.duration || 0;
+				// 0.8.2 cropping fix: now that the element knows its REAL intrinsic dims, re-fit
+				// this slot — at src-swap (syncPool) videoWidth is still 0, so applyFit fell back
+				// to manifest dims (absent on cheap-scan feeds → cover-crop). Fit CLASS only; zero
+				// play-state contact (same shape as the rotation re-fit effect above).
+				const nm = slotToName[s];
+				const it = nm ? itemByName[nm] : null;
+				if (it) applyFit(v, it);
 			});
 			v.addEventListener('canplay', () => {
 				if (

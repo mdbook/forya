@@ -195,6 +195,23 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.8.2 — portrait-clip cropping fix (fit from element dims)
+
+- **`applyFit` reads the pooled `<video>`'s own `videoWidth`/`videoHeight` first
+  (manifest dims as fallback) and re-fits on `loadedmetadata`.** The 0.7.0 cheap-scan
+  feeds carry no intrinsic dims in the manifest, so a manifest-only `pickFit(0, 0, …)`
+  hit the unknown-dims guard (`fit.ts:21`) and returned `cover`, top/bottom-cropping a
+  portrait clip on a landscape/desktop viewport. At src-swap the element's `videoWidth`
+  is still 0, so the fit re-applies once `loadedmetadata` fires (same shape as the
+  existing rotation re-fit `$effect`). `fit.ts`/`pickFit` unchanged; the change is
+  fit-class-only — zero play-state contact, cure-seven + serving-four byte-identical.
+- **Headless can't verify this for H.264 feeds.** Playwright's bundled chromium has no
+  H.264 codec, so favorite/liked never fire `loadedmetadata` headlessly (`readyState`
+  0, `videoWidth` 0) — the fit-flip is unobservable there. The letterbox lands when
+  dims are present (verified on `best`, which has poster-derived dims); favorite/liked
+  efficacy needs a real-browser (H.264) eyeball or device check. A `<video>` object-fit
+  gate can't be closed by codec-free headless chromium.
+
 ## 0.8.1 — play/pause flicker fix (iOS tap-highlight)
 
 - **`-webkit-tap-highlight-color: transparent` on `.tap` is load-bearing — don't
