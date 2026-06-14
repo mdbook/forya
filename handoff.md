@@ -244,8 +244,7 @@ autoplaying the active card (still muted → the no-audible-autoplay guarantee h
 with the bless reduced to a bare synchronous unmute of an already-playing element.
 **Verified one-tap on device (iOS 26.5.1).** The `DEBUG_PLAYBACK` overlay's `ua=`
 field (`navigator.userActivation.isActive`, captured at the bless flip) reads
-gesture-liveness if it ever regresses. Full background + device-test protocol:
-`two-tap-investigation.md`.
+gesture-liveness if it ever regresses.
 
 **iOS silent/ringer switch (NOT a bug).** With the hardware silent switch on, iOS
 mutes inline `<video>` audio regardless of a valid unmute (`snd=1` in the
@@ -439,12 +438,8 @@ is operator-on-device, criterion 3):
   future enhancement.
 - **In-app native OIDC** — v1 ships no auth; gate at the proxy. Optional in-app
   auth is a TODO.
-- **Poster endpoint** — none in v1 (`<video preload="metadata">` shows the first
-  frame). If first frames are often black, an ffmpeg poster endpoint with an
-  on-disk cache keyed `name`+`mtime` is the planned fix (no ffmpeg in the image
-  today).
-- **Brand icons** — the PWA icons in `static/` are placeholders (gradient tile +
-  glyph); final brand icons are polish.
+- **Brand icons** — `static/` ships a minimal gradient-tile "f" mark
+  (`apple-touch-icon` + 192/512 PWA icons + favicon); a richer brand mark is polish.
 - **Static demo build** — deferred; forya is a server app needing private video
   files, so no GitHub Pages demo (unlike static siblings).
 

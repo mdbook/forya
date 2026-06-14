@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.7.1 — documentation polish (public-presentability)
+
+Docs only — **no code or behaviour change** (the runtime image is identical to
+0.7.0 apart from source-comment text). Tidied for the public repo:
+
+- Removed a dangling reference to an untracked internal investigation note from the
+  `Feed.svelte` comments, `handoff.md`, and the 0.6.0 changelog entry — the root
+  cause it pointed to is already documented inline in the 0.6.1 section.
+- Dropped a stale "Future TODO" for an ffmpeg poster endpoint that actually shipped
+  in 0.5 (the posters/metadata subsystem).
+- Refreshed the README demo note and the brand-icon note to match what's shipped.
+
 ## 0.7.0 — initial-load latency: serve-stale feed + readdir-only scan
 
 Cold `/api/feed` on the big feeds dropped from **~24s to ~30ms**. The directory
@@ -164,7 +176,7 @@ the first tap is a genuine in-gesture play that mints the per-element grant.
   playback is refused; on the LAN the element is ~always buffered at tap (a
   prewarm-off A/B confirmed prewarm is not the cause). Sound carries cleanly once
   started. The fix (muted-play-then-unmute in-gesture) is a core-bless rewrite
-  needing on-device confirmation — deferred. See `two-tap-investigation.md`.
+  needing on-device confirmation — deferred.
 - **Silent/ringer switch.** On iOS the hardware silent switch mutes inline video
   audio regardless of a valid unmute — a platform constraint, not a bless bug.
 
