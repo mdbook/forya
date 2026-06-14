@@ -195,6 +195,69 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.8.0 — starred favorites + POSTERS/DATA_DIR decoupling + warm-on-boot
+
+- **`POSTERS` is now decoupled from `DATA_DIR` — load-bearing; updates the
+  "Posters + metadata gated on `DATA_DIR`" note above.** `DATA_DIR` now means only
+  "a writable volume is present" (the prerequisite for any persisted feature).
+  Poster/metadata **generation** is gated by a new `POSTERS` env (`config.posters =
+dataDir !== '' && parseBool(POSTERS, false)`, default **off**); favorites are
+  gated by the volume alone (`config.starred = dataDir !== ''`). The 0.7.0
+  cheap-scan moved from `cheap = config.dataDir === ''` to **`cheap =
+!config.posters`** — so a feed with a volume (for favorites) but `POSTERS` off
+  STAYS readdir-only/~30ms. A naive "add `DATA_DIR` ⇒ full stat" would have
+  silently undone 0.7.0 (cold `/api/feed` back to ~24s) and triggered a bulk
+  poster encode. **The cheap-scan tripwire is measured on a POSTERS-off feed
+  (favorite), not on best (POSTERS=true = full stat by design).**
+- **Chokepoint gating + a PROTECTED-FIXTURE forward-rule.** The `POSTERS` gate
+  sits ONLY at the chokepoints: `/api/poster` (204 on `!posters` — the worker's
+  ONLY trigger ⇒ zero ffmpeg on a posters-off feed), `enrichItems` (identity when
+  off ⇒ byte-identical payload), and `worker.enqueueGeneration` (injectable
+  `postersEnabled`). The **leaf** generators (`generatePoster`/`generateMeta`/
+  `dataCache`) stay volume-gated (`cacheEnabled(dataDir)`) and byte-unchanged —
+  reachable only through the now-posters-gated worker. ⚠️ **`tests/gating.test.ts`
+  is a protected fixture: any NEW caller of `generatePoster` / `generateMeta` /
+  `enqueueGeneration` MUST route through the `POSTERS` gate, or the
+  zero-ffmpeg-when-`POSTERS`-off invariant breaks silently.** Don't push the gate
+  down into the leaves (it mutates byte-identical generators for an unreachable
+  path = a net regression).
+- **Favorites (`starred`) — forya's second writable subsystem, mirrors the
+  posters discipline.** A single `starred.json` under `DATA_DIR` (`starred.ts`):
+  atomic tmp+rename, all writes serialized through one in-process queue (no
+  lost-update under concurrent toggles), in-memory `SvelteSet` cache, gated on
+  `dataDir !== ''` (no throw / zero fs when disabled). API: `GET /api/starred`
+  (`{enabled, starred[]}`), `PUT`/`DELETE /api/starred/<name>` (idempotent,
+  `safeMediaPath`-guarded, 404 when disabled). Fully decoupled from the scan
+  manifest — a mark never rescans or touches the pooled `<video>` machine. The
+  client mirrors it in a `SvelteSet` (optimistic toggle, rolled back on a failed
+  write).
+- **Double-tap gesture is additive over the cure machine.** `onTapGesture` wraps
+  `tapActive()` (called first, synchronous, byte-identical — the in-gesture bless
+  is untouched): single-tap = play/pause; a 2nd tap within 300ms on the same card
+  = TOGGLE the star + reconcile play/pause to the pre-gesture state (net-no-op via
+  the existing `v.pause()`/`tryPlayActive`, no new play path) + a tap-point heart;
+  taps 3+ = heart-only (no re-toggle, no play/pause). The cure-seven functions +
+  `onTouchStart` are byte-identical to main; serving-four untouched.
+  `touch-action: manipulation` on `.tap` kills the iOS double-tap-zoom.
+- **Warm-on-boot.** `src/hooks.server.ts` `export const init: ServerInit` fires a
+  **fire-and-forget** `void scanVideos(...).catch(()=>{})` at server start —
+  NEVER awaited (init IS awaited by SvelteKit before it serves, so awaiting the
+  ~24s cold scan would block server-ready). Reuses the 0.7.0 single-flight
+  (idempotent vs the first request); build-safe (init doesn't run at `vite
+build`). So the first post-restart visitor gets a warm feed.
+- **⚠️ Deploy (per-feed, cutover-critical).** Since `DATA_DIR` no longer implies
+  posters: feeds that want posters (best, liked) MUST carry `POSTERS=true` in prod
+  or they silently lose posters; a favorites-only feed (favorite) sets `DATA_DIR`
+  alone → cheap-scan ~30ms + starred.
+- **Known: rail black-flicker on tap is PRE-EXISTING (→ 0.8.1).** A brief black
+  flash on a play/pause tap reproduces on 0.7.1 prod (`b71fcc1`), so it is NOT a
+  0.8.0 regression. Three source-only guesses were all FALSIFIED on device (a
+  double-`play()` reconcile, a `.pool-video` GPU-layer pin, and dropping the
+  `.rail-btn` `backdrop-filter` — the last proven false by a private-tab test:
+  zero `backdrop-filter` in the served CSS, still flashed). Deferred to 0.8.1,
+  **capture-first** (iOS screen-record → is the black frame whole-screen or only
+  the video rectangle?) — no more blind CSS.
+
 ## 0.6.0 / 0.6.1 / 0.6.2 — pooled `<video>` + sound-on carry + first-card two-tap fix + identity-keyed slots (the CURRENT play machine; supersedes the per-card model below)
 
 **What changed.** `Feed.svelte` no longer mounts one `<video>` per card. It owns a

@@ -4,6 +4,46 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.8.0 — double-tap-to-favorite + POSTERS/DATA_DIR decoupling + warm-on-boot
+
+Server-persisted favorites, a feed-config decoupling that protects the 0.7.0
+cold-load win, and an eager boot scan. The playback/cure machine and the
+byte-serve (Range) path are unchanged.
+
+- **Double-tap to favorite.** Double-tap the active video to toggle a favorite
+  (a filled heart) with a tap-point heart burst; a rail heart button is the
+  explicit, a11y-friendly equivalent. Spam-tapping spawns a heart per tap but
+  toggles the mark only once (no flicker). Single-tap stays play/pause, the same
+  gesture byte-for-byte (the sound-on cure machine is untouched);
+  `touch-action: manipulation` on the tap target kills the iOS double-tap-zoom.
+- **Favorites are server-side, gated on a writable volume.** A single
+  `starred.json` under `DATA_DIR` (atomic tmp+rename, serialized write-queue,
+  in-memory cache — `starred.ts`), exposed via `GET /api/starred` +
+  `PUT`/`DELETE /api/starred/<name>`. Fully decoupled from the feed scan — a mark
+  never rescans or touches the video pool. With no `DATA_DIR` the feature
+  silently disables (the heart doesn't show).
+- **`POSTERS` decoupled from `DATA_DIR` (protects 0.7.0).** `DATA_DIR` now just
+  means "a writable volume is present" (the prerequisite for favorites). A new
+  `POSTERS` env (default **off**) gates poster/metadata generation, and the 0.7.0
+  cheap-scan now keys on `POSTERS`, not on `DATA_DIR` — so a feed that mounts a
+  volume for favorites but leaves posters off keeps the ~30ms cold `/api/feed`
+  (a naive "DATA_DIR ⇒ full stat" would have silently regressed it back to ~24s).
+  Generation is gated at the chokepoints (`/api/poster`, `enrichItems`, the
+  worker), so a posters-off feed spawns zero ffmpeg and the generators themselves
+  stay byte-unchanged.
+- **Warm-on-boot.** A background feed scan kicks at server start
+  (`hooks.server.ts` `init`, fire-and-forget) so the first visitor after a
+  restart gets a warm feed instead of triggering the cold scan.
+- **New app icon** (replaces the placeholder mark).
+
+**Known issue (pre-existing, tracked for 0.8.1):** a brief black flicker on a
+play/pause tap. It predates 0.8.0 (the same flash is present on 0.7.1) and is
+being investigated capture-first; it does not affect playback or favorites.
+
+**Deploy note:** because `DATA_DIR` no longer implies posters, feeds that want
+posters must set `POSTERS=true` explicitly at cutover (otherwise they silently
+lose posters); a favorites-only feed sets `DATA_DIR` alone.
+
 ## 0.7.1 — documentation polish (public-presentability)
 
 Docs only — **no code or behaviour change** (the runtime image is identical to
