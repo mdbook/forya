@@ -4,6 +4,26 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.8.1 — play/pause flicker fix (iOS tap-highlight)
+
+Resolves the "brief flicker on a play/pause tap" tracked as a known issue in
+0.8.0. Presentation-only — the playback/cure machine and the byte-serve (Range)
+path are byte-for-byte unchanged; the only change is one CSS property on the tap
+target.
+
+- **The flicker was iOS Safari's default tap-highlight.** The full-bleed tap
+  target (`.tap`, `inset: 0`) is a real `<button>`, so iOS painted a translucent-
+  black highlight over the _entire_ card on every press — a ~7% whole-video dim
+  that rode the active touch (a ~2-frame flash on a quick tap, sustained while a
+  finger was held). Setting `-webkit-tap-highlight-color: transparent` on `.tap`
+  removes it; the center play (▶) affordance and all behaviour are untouched.
+- **Pre-existing, not a 0.8.0 regression.** The same flash was present on 0.7.1.
+  Pinning it took a 60fps device capture + per-region luma: three source-guessed
+  CSS fixes (a play-state reconcile, a pooled-video `translateZ`, a rail
+  `backdrop-filter`) were each falsified on device first. The capture showed the
+  dim is _uniform across the whole video_ (not a scrim behind the ▶) and rides the
+  press rather than the paused state — the signature of the native tap-highlight.
+
 ## 0.8.0 — double-tap-to-favorite + POSTERS/DATA_DIR decoupling + warm-on-boot
 
 Server-persisted favorites, a feed-config decoupling that protects the 0.7.0
