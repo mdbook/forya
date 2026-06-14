@@ -59,6 +59,11 @@ export interface FeedSettings {
 	/** Whether the `starred` (favorite-mark) feature is available (DATA_DIR set,
 	 *  0.8.0). When false the client hides the heart UI and the double-tap is inert. */
 	starred: boolean;
+	/** Whether SERVER-SIDE hide is available (DATA_DIR set, 0.8.3). When true a hide
+	 *  also persists to the server (cross-device; the feed excludes it server-side);
+	 *  when false the hide stays local-only (localStorage). Distinct from `allowHide`,
+	 *  which is whether the hide BUTTON is shown at all. */
+	hidden: boolean;
 	/** Diagnostic playback overlay (DEBUG_PLAYBACK, 0.5.4). Default false → the
 	 *  overlay never renders and VideoCard emits no debug events. */
 	debugPlayback: boolean;

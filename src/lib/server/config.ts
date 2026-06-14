@@ -62,6 +62,13 @@ export const config = {
 	 *  generation, so it gates on the raw volume ALONE — works on every feed that has
 	 *  a `DATA_DIR`, independent of `POSTERS`. */
 	starred: dataDir !== '',
+	/** The SERVER-SIDE `hidden` (hide-from-feed) feature (0.8.3). Mirrors `starred`:
+	 *  a single small JSON doc gated on the raw volume ALONE (DATA_DIR set), no
+	 *  generation. When on, the feed EXCLUDES hidden names server-side (cross-device);
+	 *  when off, the client keeps its local-only (localStorage) hide. Distinct from
+	 *  `allowHide` (whether the hide BUTTON is shown) and `ignoreHidden` (skip
+	 *  dotfiles in the scan) — three independent concerns that happen to share names. */
+	hidden: dataDir !== '',
 	/** Diagnostic playback overlay (0.5.4 instrumentation). Default OFF → entirely
 	 *  inert in prod (the overlay is gated client-side on this flag and emits no
 	 *  events when off). Set `DEBUG_PLAYBACK=1` on an instance to surface a live

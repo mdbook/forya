@@ -195,6 +195,54 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.8.3 — server-side hide (hidden.json, mirror of starred) + media symlink guard
+
+- **`src/lib/server/hidden.ts` is a faithful mirror of `starred.ts`** (single
+  `hidden.json` under `DATA_DIR`, atomic tmp+rename, one serialized write-queue,
+  in-memory Set cache, env-gated so it's zero-fs + no-op when `DATA_DIR` is unset,
+  never throws). It adds two feed-exclusion exports: `hiddenSetSync()` (synchronous,
+  zero-fs in-memory read) and `warmHidden()` (boot populate, fire-and-forget in
+  `hooks.server.ts` alongside the scan).
+- **The feed exclusion is CONSUMER-side, not in `videos.ts`.** `/api/feed` and
+  `+page.server` filter `getFeed()`'s result through `hiddenSetSync()` before
+  ordering — so `videos.ts` (serving-four AND `getFeed`) stays byte-identical and the
+  cheap-scan path does zero extra filesystem work. A `.size` guard returns the same
+  `items` reference when nothing is hidden, keeping the no-hidden response
+  byte-identical. Changing `/api/feed` output for hidden items is BY DESIGN (it is
+  NOT part of serving-four byte-identity).
+- **`loadSet` is compare-and-set — load-bearing (adversarial #4).** `loadSet` does a
+  check → `await readFile` → cache-set, and the boot `warmHidden` lane is NOT in the
+  `setHidden` write-queue. Without the post-`await` re-check, a hide landing in the
+  boot read-window could be clobbered by warm's stale disk snapshot, and the next
+  `setHidden` (reading the clobbered cache without re-reading disk) would DURABLY drop
+  the name. The fix: `loadSet` never overwrites an already-populated cache for the dir
+  (adopts it), and `warmHidden` pre-checks the cache. `starred.ts` shares the same
+  check-then-set shape but has no sync feed consumer (smaller blast radius) — apply the
+  same guard there if it ever gains one.
+- **Three independent "hidden" concerns — don't conflate.** `config.hidden`
+  (= `DATA_DIR` set → server-side hide on) vs `allowHide` (`ALLOW_HIDE` → show the
+  hide button) vs `ignoreHidden` (`IGNORE_HIDDEN` → skip dotfiles in the scan).
+- **The client `persistHidden()` is fire-and-forget with NO rollback** (a failed
+  write reappears on reload; rolling back would surprise-unhide) — the same
+  best-effort contract as the starred optimistic write. The local-only localStorage
+  hide (`stores/hidden.ts` + `applyHidden`) stays as the fallback when the feature is
+  off, and the client seeds the set from `GET /api/hidden` on mount (clamping
+  `activeIndex` if the seed shrinks the feed).
+- **`hidden.json` accumulates names not validated against the feed** (a hide of a
+  since-deleted / not-in-feed clip persists; by-design — keeps the toggle off the CIFS
+  path). It needs periodic reconciliation against the live manifest, or the seed
+  endpoint could intersect with it so dead names self-prune. (adversarial #12, deferred)
+- **`/api/media` `lstat`s, never `stat`s — symlink guard (adversarial #1, security).**
+  `safeMediaPath` is a purely LEXICAL guard; `stat` FOLLOWS a symlink, so a
+  `clip.mp4 -> /etc/passwd` planted in `VIDEO_DIR` (in-dir name, escaping target) would
+  have streamed the out-of-dir file with Range support. `statFile` now `lstat`s and
+  rejects `isSymbolicLink() || !isFile()` → 404. For a regular file `lstat === stat`, so
+  the Range byte math is unchanged (serving-four byte-identical; route-level guard).
+  Mirrors the poster route's F7 guard. **`/share/<token>/media` (0.8.4) reuses this byte
+  path on an UNAUTH surface — the guard MUST stay; it's a hard 0.8.4 prereq.** The live
+  `:ro` library can't be symlink-planted, so `tests/range.test.ts`'s planted-symlink→404
+  case is the only regression guard — keep it.
+
 ## 0.8.2 — portrait-clip cropping fix (fit from element dims)
 
 - **`applyFit` reads the pooled `<video>`'s own `videoWidth`/`videoHeight` first

@@ -575,14 +575,31 @@
 		lastHidden = name;
 		clearTimeout(undoTimer);
 		undoTimer = setTimeout(() => (lastHidden = null), 5000);
+		persistHidden(name, true); // 0.8.3: also persist server-side when enabled
 	}
 
 	function undoHide() {
 		if (!lastHidden) return;
-		hidden.delete(lastHidden);
+		const name = lastHidden;
+		hidden.delete(name);
 		saveHidden(feedName, hidden);
 		lastHidden = null;
 		clearTimeout(undoTimer);
+		persistHidden(name, false); // 0.8.3: also unhide server-side when enabled
+	}
+
+	// 0.8.3: mirror a hide/unhide to the SERVER-SIDE set. The local `hidden` SvelteSet +
+	// localStorage is the instant UX (the feed already filters via `visible`); this
+	// fire-and-forget PUT/DELETE persists it so it's cross-device and the server EXCLUDES
+	// it from future feeds. Best-effort + silent on failure (same contract as the server
+	// store and the starred optimistic write) — we deliberately do NOT roll back the local
+	// hide on a network error (that would surprise-unhide); it just isn't persisted and
+	// reappears on a full reload. No-op when server-hide is off → the hide stays local-only.
+	function persistHidden(name: string, hide: boolean) {
+		if (!settings.hidden) return;
+		fetch(`/api/hidden/${encodeURIComponent(name)}`, { method: hide ? 'PUT' : 'DELETE' }).catch(
+			() => {}
+		);
 	}
 
 	// Which cards mount the (cheap) shell — a generous radius so posters preload and every
@@ -1004,6 +1021,28 @@
 				.then((r) => (r.ok ? r.json() : null))
 				.then((d: { starred?: string[] } | null) => {
 					if (d?.starred) for (const n of d.starred) starredSet.add(n);
+				})
+				.catch(() => {});
+		}
+
+		// Seed the SERVER hidden set (0.8.3) so a clip hidden on ANOTHER device stays hidden
+		// here too. The server already excludes hidden names from the feed, so this mostly
+		// keeps the local `hidden` set + undo + localStorage consistent (and catches any item
+		// that raced ahead of the boot warm). Single small fetch, gated, silent on failure.
+		if (settings.hidden) {
+			fetch('/api/hidden')
+				.then((r) => (r.ok ? r.json() : null))
+				.then((d: { hidden?: string[] } | null) => {
+					if (d?.hidden && d.hidden.length) {
+						for (const n of d.hidden) hidden.add(n);
+						saveHidden(feedName, hidden);
+						// Clamp activeIndex if the seed shrank the visible feed (mirror hide():574,
+						// adversarial #17). Narrow — at mount activeIndex is 0 and the server already
+						// excludes hidden names — but a feed that raced ahead of the boot-warm could
+						// shrink here; keep activeIndex in range so the active card is never stranded.
+						const count = applyHidden(allItems, hidden).length;
+						if (activeIndex >= count) activeIndex = Math.max(0, count - 1);
+					}
 				})
 				.catch(() => {});
 		}

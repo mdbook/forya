@@ -1,6 +1,7 @@
 import type { PageServerLoad } from './$types';
 import { config } from '$lib/server/config';
 import { getFeed, seededShuffle } from '$lib/server/videos';
+import { hiddenSetSync } from '$lib/server/hidden';
 import { enrichItems } from '$lib/server/probe';
 
 // First page of the feed, sized so a huge directory doesn't inline a multi-MB
@@ -26,7 +27,13 @@ export const load: PageServerLoad = async () => {
 	// a brief warming state and re-runs this load until the first background scan
 	// lands (see +page.svelte). seededShuffle([]) is [], so warming SSR is coherent.
 	const { items, warming } = getFeed();
-	const shuffled = seededShuffle(items, seed);
+	// Server-side hide (0.8.3): exclude hidden names before shuffle/slice so the SSR
+	// page, `total`, and the client's seeded paging all agree on the VISIBLE set.
+	// Zero-fs in-memory read (warmed at boot); `.size` guard keeps the no-hidden
+	// payload byte-identical to pre-0.8.3.
+	const hidden = hiddenSetSync();
+	const visible = hidden.size ? items.filter((it) => !hidden.has(it.name)) : items;
+	const shuffled = seededShuffle(visible, seed);
 	return {
 		feed: config.feedName,
 		seed,
@@ -42,6 +49,7 @@ export const load: PageServerLoad = async () => {
 			autoAdvance: config.autoAdvance,
 			posters: config.posters,
 			starred: config.starred,
+			hidden: config.hidden,
 			debugPlayback: config.debugPlayback,
 			buildSha: config.buildSha
 		}
