@@ -1267,13 +1267,6 @@
 		object-fit: cover;
 		opacity: 0;
 		transition: opacity 0.25s ease;
-		/* iOS black-flash guard (0.8.0 M6): pin the pooled <video> to its own GPU
-		   compositor layer so a tap-time play/pause repaint can't drop the painted frame to
-		   the black .media bg for a frame (the single+double-tap flicker). translateZ(0) +
-		   backface-visibility are the canonical iOS video-flash fix — CSS-only, no transform
-		   offset, touches none of the cure machinery; confirmed on-device (re-canary). */
-		transform: translateZ(0);
-		backface-visibility: hidden;
 	}
 	:global(.pool-video.revealed) {
 		opacity: 1;

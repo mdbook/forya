@@ -135,11 +135,16 @@
 		height: 2.75rem;
 		padding: 0;
 		color: #fff;
-		background: rgba(0, 0, 0, 0.4);
+		/* Solid translucent fill (no backdrop-filter): the rail buttons are always-present,
+		   position:fixed OVER the full-bleed <video>, so a persistent backdrop-filter must
+		   re-rasterize its backdrop every time a play/pause tap recomposites the video — on iOS
+		   that re-sample flashes one black frame on every tap (the long-standing rail flicker,
+		   present since before 0.8.0). A solid fill has no backdrop to re-sample → cannot flash.
+		   Bumped 0.4→0.5 to hold icon contrast over bright frames without the blur's help. */
+		background: rgba(0, 0, 0, 0.5);
 		border: 1px solid rgba(255, 255, 255, 0.15);
 		border-radius: 50%;
 		cursor: pointer;
-		backdrop-filter: blur(8px);
 	}
 
 	.rail-btn.on {
