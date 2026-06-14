@@ -1303,10 +1303,14 @@
 		gap: 0.75rem;
 		padding: 0.5rem 0.5rem 0.5rem 1rem;
 		color: #fff;
-		background: rgba(0, 0, 0, 0.7);
-		border: 1px solid rgba(255, 255, 255, 0.15);
+		/* Frosted glass (0.8.0): match the rail icon-chrome — translucent fill + a stronger
+		   backdrop blur (with saturation for the glass look) + a hairline border + a soft lift
+		   shadow off the video. (Was a flatter rgba(0,0,0,0.7) + blur(8px).) */
+		background: rgba(0, 0, 0, 0.45);
+		border: 1px solid rgba(255, 255, 255, 0.18);
 		border-radius: 999px;
-		backdrop-filter: blur(8px);
+		backdrop-filter: blur(16px) saturate(140%);
+		box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 		font-size: 0.9rem;
 	}
 
@@ -1360,10 +1364,14 @@
 		padding: 0.5rem 1rem;
 		color: #fff;
 		white-space: nowrap;
-		background: rgba(0, 0, 0, 0.7);
-		border: 1px solid rgba(255, 255, 255, 0.15);
+		/* Frosted glass (0.8.0): match the rail icon-chrome — translucent fill + a stronger
+		   backdrop blur (with saturation for the glass look) + a hairline border + a soft lift
+		   shadow off the video. (Was a flatter rgba(0,0,0,0.7) + blur(8px).) */
+		background: rgba(0, 0, 0, 0.45);
+		border: 1px solid rgba(255, 255, 255, 0.18);
 		border-radius: 999px;
-		backdrop-filter: blur(8px);
+		backdrop-filter: blur(16px) saturate(140%);
+		box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 		font-size: 0.9rem;
 	}
 </style>
