@@ -69,6 +69,17 @@ export const config = {
 	 *  `allowHide` (whether the hide BUTTON is shown) and `ignoreHidden` (skip
 	 *  dotfiles in the scan) — three independent concerns that happen to share names. */
 	hidden: dataDir !== '',
+	/** Share-link store (0.8.4, scheme B). A `share.json` of CSPRNG token→clip records
+	 *  under `DATA_DIR` (mirror `hidden`/`starred`) — gated on the raw volume ALONE, no
+	 *  signing secret (revoke = delete a row, not rotate a key). Liked-only by deploy
+	 *  (only `liked` gets `DATA_DIR` + `PUBLIC_SHARE_BASE`). Off → `/share/*` hard-404s and
+	 *  `share()` falls back to `location.origin` (byte-identical to pre-0.8.4). */
+	share: dataDir !== '',
+	/** Public base URL for share links (0.8.4), e.g. `https://share.mdbook.me`. Surfaced
+	 *  to the client (`settings.shareBase`) so `share()` builds an off-network-resolvable
+	 *  URL instead of the LAN request origin. Empty → `share()` falls back to
+	 *  `location.origin` (pre-0.8.4). Safe to expose (a hostname, not a secret). */
+	shareBase: env.PUBLIC_SHARE_BASE ?? '',
 	/** Diagnostic playback overlay (0.5.4 instrumentation). Default OFF → entirely
 	 *  inert in prod (the overlay is gated client-side on this flag and emits no
 	 *  events when off). Set `DEBUG_PLAYBACK=1` on an instance to surface a live
