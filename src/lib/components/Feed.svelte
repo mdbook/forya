@@ -735,13 +735,20 @@
 	// primitives (v.pause() / tryPlayActive) — no new play path, no raw v.play(). In-gesture on
 	// the blessed active element (D-safe). Makes the double-tap's END play state DETERMINISTIC
 	// (net-no-op) regardless of how many tapActive toggles fired (C2).
+	//
+	// Compares against `activePaused` (the INTENT, set synchronously by tapActive), NOT the live
+	// `v.paused` — which lags a still-pending play() and would mis-fire a REDUNDANT tryPlayActive
+	// right after tap-2 already resumed (a double play() on the same element → AbortError +
+	// decoder hiccup = the M6 black-flicker). In the common 2-tap case the two toggles already
+	// net to the pre-double state, so this is a no-op; it only ACTS when the net is genuinely
+	// wrong (e.g. tap-1 was the first-bless, which doesn't toggle play/pause).
 	function reconcilePlayState(targetPaused: boolean) {
 		const v = activeVideo();
 		if (!v) return;
-		if (targetPaused && !v.paused) {
+		if (targetPaused && !activePaused) {
 			v.pause();
 			activePaused = true;
-		} else if (!targetPaused && v.paused) {
+		} else if (!targetPaused && activePaused) {
 			activePaused = false;
 			activeBlocked = false;
 			tryPlayActive(v);
