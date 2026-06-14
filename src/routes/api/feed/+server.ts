@@ -1,18 +1,20 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { config } from '$lib/server/config';
-import { scanVideos, seededShuffle } from '$lib/server/videos';
+import { getFeed, seededShuffle } from '$lib/server/videos';
 import { enrichItems } from '$lib/server/probe';
 
-// GET /api/feed → { feed, items: [...] } (SPEC §3).
-// Default order is mtime-desc (from the scan). `?shuffle=1&seed=N` returns a
-// deterministic seeded shuffle so client paging stays stable across requests.
-// `?offset=O&limit=L` (0.3.1, additive) paginates AFTER ordering — the page
-// feed lazy-loads with these, threading the same `seed` so each page continues
-// the same shuffled order. No params → the full list (the original contract).
-// Stateless; no-cache (the ~10s scan memo lives server-side in videos.ts).
+// GET /api/feed → { feed, items: [...], warming } (SPEC §3).
+// Default order is name-asc (a stable total order; 0.7.0 dropped the per-file
+// stat that mtime-desc needed). `?shuffle=1&seed=N` returns a deterministic
+// seeded shuffle so client paging stays stable across requests. `?offset=O&limit=L`
+// (0.3.1, additive) paginates AFTER ordering — the page feed lazy-loads with
+// these, threading the same `seed` so each page continues the same shuffled order.
+// No params → the full list (the original contract).
+// Stateless; no-cache. The manifest is served-stale-while-revalidate from memory
+// (getFeed never blocks on a CIFS scan); `warming` is true only on a cold start.
 export const GET: RequestHandler = async ({ url }) => {
-	const items = await scanVideos();
+	const { items, warming } = getFeed();
 
 	let ordered = items;
 	if (url.searchParams.get('shuffle') === '1') {
@@ -35,7 +37,7 @@ export const GET: RequestHandler = async ({ url }) => {
 	const enriched = await enrichItems(page);
 
 	return json(
-		{ feed: config.feedName, items: enriched },
+		{ feed: config.feedName, items: enriched, warming },
 		{ headers: { 'cache-control': 'no-cache' } }
 	);
 };

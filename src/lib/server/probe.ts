@@ -131,9 +131,12 @@ export async function enrichItems(
 	dataDir: string = config.dataDir
 ): Promise<FeedItem[]> {
 	if (!cacheEnabled(dataDir)) return items; // disabled → byte-identical
+	// Only reached when the cache is ON (DATA_DIR set) — the full-stat scan path,
+	// where `mtime` is always present (it's the cache key). `?? 0` is just the type
+	// guard for the now-optional field (0.7.0); it never fires on this path.
 	return Promise.all(
 		items.map(async (it) => {
-			const meta = await readMeta(it.name, it.mtime, dataDir);
+			const meta = await readMeta(it.name, it.mtime ?? 0, dataDir);
 			return meta ? { ...it, width: meta.width, height: meta.height, duration: meta.duration } : it;
 		})
 	);

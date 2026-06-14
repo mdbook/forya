@@ -245,6 +245,30 @@
 	// All callbacks gen-guarded so a scrolled-past attempt no-ops. The play() call is ALWAYS
 	// muted (the cure — never an unmuted play() off-gesture); the sound-on unmute happens in
 	// onActivePlaying() once the element is confirmed playing (D-safe on a blessed element).
+	// One gen-guarded play() attempt on the re-resolved active element: success →
+	// onActivePlaying; AbortError (a superseded play, expected on rapid scroll) →
+	// silently drop; any other rejection → onFail(err, el) decides the next step.
+	// Factored out of the retry ladder below (#5c) — pure shape, identical behaviour:
+	// same gen guards, same AbortError handling, same play() call sites + ordering.
+	// It never touches muted state (the cure is upstream in tryPlayActive's caller).
+	function attempt(
+		getEl: () => HTMLVideoElement | null | undefined,
+		gen: number,
+		onFail: (err: unknown, el: HTMLVideoElement) => void
+	) {
+		const el = getEl();
+		if (gen !== playGen || !el) return;
+		el.play()
+			.then(() => {
+				if (gen === playGen) onActivePlaying();
+			})
+			.catch((err: unknown) => {
+				if (gen !== playGen) return;
+				if (err instanceof DOMException && err.name === 'AbortError') return;
+				onFail(err, el);
+			});
+	}
+
 	function tryPlayActive(v: HTMLVideoElement) {
 		if (!v.isConnected) return; // not parked into a slot yet
 		const gen = ++playGen;
@@ -254,39 +278,26 @@
 		if (v.paused) v.muted = true;
 		const p = v.play();
 		if (!p || typeof p.then !== 'function') return;
+		// Attempt 1: the play() just issued on `v`. On a non-Abort rejection, run the
+		// retry ladder on the re-resolved active element via attempt():
 		p.then(() => {
 			if (gen === playGen) onActivePlaying();
 		}).catch((err: unknown) => {
 			if (gen !== playGen) return;
 			if (err instanceof DOMException && err.name === 'AbortError') return;
-			requestAnimationFrame(() => {
-				const cur = activeVideo();
-				if (gen !== playGen || !cur) return;
-				cur
-					.play()
-					.then(() => {
-						if (gen === playGen) onActivePlaying();
-					})
-					.catch((err2: unknown) => {
-						if (gen !== playGen) return;
-						if (err2 instanceof DOMException && err2.name === 'AbortError') return;
-						pushDebug(activeIndex, 'reject', err2 instanceof DOMException ? err2.name : 'err');
-						activeBlocked = true;
-						if (cur && isMediaReady(cur.readyState)) {
-							setTimeout(() => {
-								const c2 = activeVideo();
-								if (gen !== playGen || !c2) return;
-								c2.play()
-									.then(() => {
-										if (gen === playGen) onActivePlaying();
-									})
-									.catch(() => {
-										/* leave blocked → tap-to-play; one delayed retry only */
-									});
-							}, 250);
-						}
-					});
-			});
+			// Attempt 2 (next frame): re-resolve the active element and retry.
+			requestAnimationFrame(() =>
+				attempt(activeVideo, gen, (err2, cur) => {
+					pushDebug(activeIndex, 'reject', err2 instanceof DOMException ? err2.name : 'err');
+					activeBlocked = true;
+					// Attempt 3: one delayed retry, but only if the element is actually
+					// buffered (else the canplay self-heal picks it up). Terminal — a final
+					// failure just leaves the card blocked (tap-to-play).
+					if (isMediaReady(cur.readyState)) {
+						setTimeout(() => attempt(activeVideo, gen, () => {}), 250);
+					}
+				})
+			);
 		});
 	}
 
@@ -519,6 +530,30 @@
 		}
 		return `${v.toFixed(1)} ${units[i]}`;
 	}
+
+	// Lazy info-overlay size (0.7.0): the cheap (poster-off) scan omits `size` to
+	// avoid a per-file stat across the whole library. When the info card is open we
+	// fetch the size for the SINGLE active card on demand — a HEAD to the media
+	// endpoint, whose content-length IS the file size. One request, one card, only
+	// while info is open — NOT a scan. Cached per name (plain object, reassigned to
+	// stay reactive — same pattern as revealedByName). The poster feed keeps the
+	// manifest `size` (full stat), so this never fires there.
+	let sizeByName = $state<Record<string, number>>({});
+	async function ensureInfoSize(item: FeedItem | undefined) {
+		if (!item || item.size != null || sizeByName[item.name] != null) return;
+		try {
+			const res = await fetch(item.url, { method: 'HEAD' });
+			const len = Number(res.headers.get('content-length'));
+			if (res.ok && Number.isFinite(len) && len > 0) {
+				sizeByName = { ...sizeByName, [item.name]: len };
+			}
+		} catch {
+			/* offline / transient — the overlay just omits the size segment */
+		}
+	}
+	$effect(() => {
+		if (infoOpen) ensureInfoSize(activeItem);
+	});
 
 	function hide(name: string | undefined) {
 		if (!name) return;
@@ -984,12 +1019,15 @@
 		onhide={() => hide(activeItem?.name)}
 	/>
 	{#if infoOpen && activeItem}
+		{@const infoSize = activeItem.size ?? sizeByName[activeItem.name]}
 		<div class="info-overlay">
 			<button class="info-name" onclick={() => copyId(activeItem.name)} title="Copy ID">
 				<span class="info-id">{activeItem.name}</span>
 				<Copy size={13} aria-hidden="true" />
 			</button>
-			<p class="info-meta">{formatBytes(activeItem.size)} · {activeItem.type}</p>
+			<p class="info-meta">
+				{infoSize != null ? `${formatBytes(infoSize)} · ` : ''}{activeItem.type}
+			</p>
 		</div>
 	{/if}
 {/if}

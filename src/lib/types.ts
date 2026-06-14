@@ -7,10 +7,15 @@ export interface FeedItem {
 	name: string;
 	/** Media URL: `/api/media/<encoded name>`. */
 	url: string;
-	/** File size in bytes. */
-	size: number;
-	/** Last-modified time, epoch ms. */
-	mtime: number;
+	/** File size in bytes. OPTIONAL since 0.7.0: the cheap (readdir-only) scan on
+	 *  poster-off feeds skips the per-file stat, so `size` is absent there — the
+	 *  info overlay lazy-fetches it for the single open card (HEAD content-length).
+	 *  Present on the poster feed (full stat) and after a lazy fetch. */
+	size?: number;
+	/** Last-modified time, epoch ms. OPTIONAL since 0.7.0: only fetched on the
+	 *  poster feed, where it's the poster/meta cache key. Absent on poster-off
+	 *  feeds (the UI shuffles, so mtime ordering is discarded anyway). */
+	mtime?: number;
 	/** MIME type, e.g. `video/mp4`. */
 	type: string;
 	// Optional probed metadata (0.5/M2), present only when the DATA_DIR feature is
@@ -31,6 +36,10 @@ export interface Feed {
 	/** FEED_NAME — title/branding for this instance. */
 	feed: string;
 	items: FeedItem[];
+	/** 0.7.0: true when the server has no manifest yet (fresh/restarted container,
+	 *  before the first background scan lands) so it served empty. The client polls
+	 *  until it clears. Absent/false in steady state. */
+	warming?: boolean;
 }
 
 /** Client-relevant runtime settings, surfaced from `config` via the page load

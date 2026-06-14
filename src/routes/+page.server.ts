@@ -1,6 +1,6 @@
 import type { PageServerLoad } from './$types';
 import { config } from '$lib/server/config';
-import { scanVideos, seededShuffle } from '$lib/server/videos';
+import { getFeed, seededShuffle } from '$lib/server/videos';
 import { enrichItems } from '$lib/server/probe';
 
 // First page of the feed, sized so a huge directory doesn't inline a multi-MB
@@ -21,11 +21,17 @@ const FIRST_PAGE = 24;
 // preload-window sizes, autoplay-next default) — the client never reads env.
 export const load: PageServerLoad = async () => {
 	const seed = Math.floor(Math.random() * 2 ** 31);
-	const shuffled = seededShuffle(await scanVideos(), seed);
+	// SWR: getFeed() returns the in-memory manifest INSTANTLY (never blocks on a
+	// CIFS scan). On a cold start it returns empty + warming:true; the page renders
+	// a brief warming state and re-runs this load until the first background scan
+	// lands (see +page.svelte). seededShuffle([]) is [], so warming SSR is coherent.
+	const { items, warming } = getFeed();
+	const shuffled = seededShuffle(items, seed);
 	return {
 		feed: config.feedName,
 		seed,
 		total: shuffled.length,
+		warming,
 		// Enrich only the page we send (bounded, cache-read-only); identity when
 		// DATA_DIR is off, so the payload stays byte-identical (0.5/M2).
 		items: await enrichItems(shuffled.slice(0, FIRST_PAGE)),

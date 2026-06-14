@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
 	clearScanCache,
+	getFeed,
 	isVideoFile,
 	mimeFromExt,
 	safeMediaPath,
@@ -80,20 +81,31 @@ describe('scanVideos', () => {
 		expect(items.map((i) => i.name).sort()).toEqual(['.hidden.mp4', 'visible.mp4']);
 	});
 
-	it('returns items with url/size/type and mtime-desc order', async () => {
-		await write('old.mp4', 100);
-		await write('new.mp4', 200);
-		const oldPath = path.join(dir, 'old.mp4');
-		const newPath = path.join(dir, 'new.mp4');
-		await fsp.utimes(oldPath, new Date(1_000_000), new Date(1_000_000));
-		await fsp.utimes(newPath, new Date(2_000_000), new Date(2_000_000));
+	it('cheap path (no DATA_DIR): name-asc order, url/type, and NO size/mtime', async () => {
+		await write('b-new.mp4', 200);
+		await write('a-old.mp4', 100);
+		// cheap path is the default (config.dataDir === '' in the test env): Approach B
+		// does a readdir-only scan and drops the per-file stat entirely.
 		const items = await scanVideos(dir, true);
-		expect(items.map((i) => i.name)).toEqual(['new.mp4', 'old.mp4']);
+		// name-asc (a stable total order), NOT mtime — the per-file stat is gone.
+		expect(items.map((i) => i.name)).toEqual(['a-old.mp4', 'b-new.mp4']);
 		const first = items[0];
-		expect(first.url).toBe('/api/media/new.mp4');
-		expect(first.size).toBe(200);
+		expect(first.url).toBe('/api/media/a-old.mp4');
 		expect(first.type).toBe('video/mp4');
-		expect(typeof first.mtime).toBe('number');
+		expect(first.size).toBeUndefined();
+		expect(first.mtime).toBeUndefined();
+	});
+
+	it('full path (cheap=false, poster feed): includes size + mtime, still name-asc', async () => {
+		await write('b.mp4', 200);
+		await write('a.mp4', 100);
+		const items = await scanVideos(dir, true, false);
+		expect(items.map((i) => i.name)).toEqual(['a.mp4', 'b.mp4']);
+		const a = items[0];
+		expect(a.url).toBe('/api/media/a.mp4');
+		expect(a.size).toBe(100);
+		expect(a.type).toBe('video/mp4');
+		expect(typeof a.mtime).toBe('number');
 	});
 
 	it('encodes special characters in the media url', async () => {
@@ -133,6 +145,41 @@ describe('scanVideos caching (0.3.2: dir-mtime invalidation + single-flight)', (
 		await write('a.mp4');
 		const [a, b] = await Promise.all([scanVideos(dir, true), scanVideos(dir, true)]);
 		expect(b).toBe(a); // both awaited the same in-flight scan
+	});
+});
+
+describe('getFeed (0.7.0 serve-stale-while-revalidate + warming)', () => {
+	it('cold start: returns warming + empty, then serves the scanned manifest', async () => {
+		await write('a.mp4');
+		await write('b.mp4');
+		const cold = getFeed(dir, true);
+		expect(cold.warming).toBe(true);
+		expect(cold.items).toEqual([]);
+		// getFeed kicked a background scan; await the SAME in-flight scan (single-flight
+		// keys on dir+ignoreHidden, so this joins it rather than starting a second).
+		await scanVideos(dir, true);
+		const warm = getFeed(dir, true);
+		expect(warm.warming).toBe(false);
+		expect(warm.items.map((i) => i.name)).toEqual(['a.mp4', 'b.mp4']);
+	});
+
+	it('serves the cached manifest synchronously, same ref, no re-scan', async () => {
+		await write('a.mp4');
+		const scanned = await scanVideos(dir, true);
+		const first = getFeed(dir, true);
+		const second = getFeed(dir, true);
+		expect(first.warming).toBe(false);
+		expect(first.items).toBe(scanned); // straight from the cache, no re-walk
+		expect(second.items).toBe(first.items);
+	});
+
+	it('an empty/missing directory loads (not warming forever)', async () => {
+		const missing = path.join(dir, 'nope');
+		expect(getFeed(missing, true).warming).toBe(true);
+		await scanVideos(missing, true); // background scan settles to []
+		const res = getFeed(missing, true);
+		expect(res.warming).toBe(false);
+		expect(res.items).toEqual([]);
 	});
 });
 

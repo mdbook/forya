@@ -4,6 +4,38 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.7.0 — initial-load latency: serve-stale feed + readdir-only scan
+
+Cold `/api/feed` on the big feeds dropped from **~24s to ~30ms**. The directory
+lives on a CIFS/SMB3 mount where each per-file `stat` is a network round-trip, and
+the scan did one `stat` **per file** on the request path — 11,878 files ≈ 23.7s
+cold. A bare `readdir` of the same directory is ~1.2s (SMB returns directory
+attributes inline), so the per-file stats were the whole cost. Two changes, server-
+side only — the playback/cure machine and the byte-serve (Range) path are untouched.
+
+- **Serve-stale-while-revalidate.** The request path never blocks on a directory
+  scan: it returns the last-known-good manifest from memory instantly and only
+  schedules a background re-scan when due (single-flight, throttled to ~30s). A
+  fresh or just-restarted container with no manifest yet serves an empty feed with
+  a `warming` flag; the page shows a brief "warming up" screen and re-loads until
+  the first background scan lands (~1–2s). No persistence, no new mounts, no config
+  change.
+- **Readdir-only scan (no per-file stat).** On feeds without the poster/metadata
+  cache (the large feeds), the scan is now a single `readdir` and drops `size`/
+  `mtime` — nothing there consumes them (posters off, and the feed is always
+  shuffled so modified-time order is discarded anyway). The poster feed keeps the
+  full stat (modified-time is its cache key). Base order is now by **name** (a
+  stable total order) so server-rendered and lazily-fetched pages stay in sync
+  without modified-time.
+- **Info-overlay size on demand.** With `size` no longer in the manifest on the
+  large feeds, the info panel fetches it for the single open card via a `HEAD`
+  request (the media endpoint already returns `Content-Length`) — one request, on
+  demand, never a scan. `FeedItem.size`/`mtime` are now optional.
+
+Internal: `tryPlayActive`'s nested play-retry ladder was refactored into a small
+`attempt()` helper — pure readability, behaviour byte-identical (same retry order,
+gesture-generation guards, and the always-muted cure invariant), device-reverified.
+
 ## 0.6.2 — pool keyed by clip identity (hide/undo correctness) + foreground re-drive
 
 Two correctness fixes on the pooled-`<video>` play machine, both client-only.
