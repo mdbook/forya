@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { config } from '$lib/server/config';
 import { getFeed, seededShuffle } from '$lib/server/videos';
+import { hiddenSetSync } from '$lib/server/hidden';
 import { enrichItems } from '$lib/server/probe';
 
 // GET /api/feed → { feed, items: [...], warming } (SPEC §3).
@@ -16,10 +17,17 @@ import { enrichItems } from '$lib/server/probe';
 export const GET: RequestHandler = async ({ url }) => {
 	const { items, warming } = getFeed();
 
-	let ordered = items;
+	// Server-side hide (0.8.3): drop hidden names BEFORE ordering/paging so `total`
+	// and offsets are over the VISIBLE set. `hiddenSetSync` is a ZERO-fs in-memory
+	// read (warmed at boot), so the ~30ms cheap-scan stays cheap; the `.size` guard
+	// keeps the response byte-identical to pre-0.8.3 when nothing is hidden.
+	const hidden = hiddenSetSync();
+	const visible = hidden.size ? items.filter((it) => !hidden.has(it.name)) : items;
+
+	let ordered = visible;
 	if (url.searchParams.get('shuffle') === '1') {
 		const seed = Number.parseInt(url.searchParams.get('seed') ?? '0', 10);
-		ordered = seededShuffle(items, Number.isFinite(seed) ? seed : 0);
+		ordered = seededShuffle(visible, Number.isFinite(seed) ? seed : 0);
 	}
 
 	const offsetParam = url.searchParams.get('offset');
