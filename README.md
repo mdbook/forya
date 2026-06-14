@@ -13,7 +13,7 @@ docker run -p 3000:3000 -v /path/to/videos:/srv/videos registry.mdbook.me/mikayl
 Then open <http://localhost:3000>. On an iPhone, use **Share → Add to Home
 Screen** to launch it full-screen like a native app.
 
-> _Screenshot / demo gif: TODO._
+> _No public demo — forya serves private video files. See [Configuration](#configuration) to run your own._
 
 Built with SvelteKit (adapter-node) + Svelte 5 + TypeScript. No database, no
 build step at runtime, no ffmpeg — one Node process scans the directory and
