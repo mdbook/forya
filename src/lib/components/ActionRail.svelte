@@ -12,6 +12,7 @@
 	// offline-safe (no runtime icon CDN).
 	import Volume2 from '@lucide/svelte/icons/volume-2';
 	import VolumeX from '@lucide/svelte/icons/volume-x';
+	import Heart from '@lucide/svelte/icons/heart';
 	import SkipForward from '@lucide/svelte/icons/skip-forward';
 	import Share from '@lucide/svelte/icons/share';
 	import Info from '@lucide/svelte/icons/info';
@@ -22,8 +23,11 @@
 		autoAdvance,
 		allowHide,
 		infoOpen,
+		showStarred,
+		starred,
 		onmute,
 		onautoadvance,
+		onstar,
 		onshare,
 		oninfo,
 		onhide
@@ -33,9 +37,16 @@
 		autoAdvance: boolean;
 		allowHide: boolean;
 		infoOpen: boolean;
+		/** Show the favorite (heart) control — the `starred` feature is on (DATA_DIR set). */
+		showStarred: boolean;
+		/** Whether the active card is favorited (filled heart). */
+		starred: boolean;
 		/** First tap also unlocks audio — Feed does the unlock inside the gesture. */
 		onmute: () => void;
 		onautoadvance: () => void;
+		/** Toggle the active card's favorite mark (the a11y / instant path; double-tap is the
+		 *  gesture equivalent). */
+		onstar: () => void;
 		onshare: () => void;
 		oninfo: () => void;
 		onhide: () => void;
@@ -55,6 +66,20 @@
 			<Volume2 size={24} aria-hidden="true" />
 		{/if}
 	</button>
+
+	{#if showStarred}
+		<!-- Favorite (heart): filled red when starred. The double-tap gesture is the primary
+		     path; this button is the instant, unambiguous, a11y-friendly equivalent. -->
+		<button
+			class="rail-btn heart-btn"
+			class:starred
+			onclick={onstar}
+			aria-label={starred ? 'Remove from favorites' : 'Add to favorites'}
+			aria-pressed={starred}
+		>
+			<Heart size={24} fill={starred ? 'currentColor' : 'none'} aria-hidden="true" />
+		</button>
+	{/if}
 
 	<!-- Autoplay-next toggle: a single SKIP icon, always (no glyph-swap). State is conveyed by
 	     the white `.on` styling when enabled + the toast on toggle — the text label and the
@@ -120,6 +145,12 @@
 	.rail-btn.on {
 		background: rgba(255, 255, 255, 0.85);
 		color: #000;
+	}
+
+	/* Favorited: a filled red heart (the icon's `fill` is set inline). Distinct from the
+	   white `.on` toggle style so "favorited" reads as a heart, not a generic active button. */
+	.heart-btn.starred {
+		color: #ff2d55;
 	}
 
 	.rail-btn:active {

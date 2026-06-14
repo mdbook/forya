@@ -281,6 +281,10 @@
 		background: transparent;
 		cursor: pointer;
 		appearance: none;
+		/* Kill the iOS double-tap-to-zoom on the tap target so the double-tap-to-favorite
+		   gesture (0.8.0) lands as two taps, not a zoom (the viewport has no
+		   user-scalable=no, and we don't want to disable pinch-zoom elsewhere). */
+		touch-action: manipulation;
 	}
 
 	/* The .tap fills the cell, so the global :focus-visible ring (outward offset) would clip

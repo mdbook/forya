@@ -27,6 +27,7 @@
 	import ActionRail from './ActionRail.svelte';
 	import Undo2 from '@lucide/svelte/icons/undo-2';
 	import Copy from '@lucide/svelte/icons/copy';
+	import Heart from '@lucide/svelte/icons/heart';
 	import type { FeedItem, FeedSettings } from '$lib/types';
 	import {
 		saveMute,
@@ -644,6 +645,78 @@
 		cardEls[i]?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
 	}
 
+	// ── Starred / favorite mark (0.8.0) ──────────────────────────────────────────────
+	// Client-side reactive set (mirrors `hidden`): the single source of truth for the
+	// rail heart's filled state + the double-tap burst. Seeded from GET /api/starred on
+	// mount (when the feature is on) and updated OPTIMISTICALLY on toggle, with a
+	// PUT/DELETE to persist (rolled back on failure). Fully decoupled from the feed
+	// manifest — a mark never rescans or touches the pooled-<video> machine.
+	const starredSet = new SvelteSet<string>();
+	const DOUBLE_TAP_MS = 280;
+	let lastTapAt = 0;
+	let lastTapName: string | null = null;
+	let burstTick = $state(0);
+	let bursting = $state(false);
+	let burstTimer: ReturnType<typeof setTimeout> | undefined;
+
+	async function setStarred(name: string, want: boolean) {
+		if (!settings.starred) return;
+		// Optimistic: flip the local set NOW (instant heart) → persist → revert on failure.
+		if (want) starredSet.add(name);
+		else starredSet.delete(name);
+		try {
+			const res = await fetch(`/api/starred/${encodeURIComponent(name)}`, {
+				method: want ? 'PUT' : 'DELETE'
+			});
+			if (!res.ok) throw new Error(String(res.status));
+		} catch {
+			if (want) starredSet.delete(name);
+			else starredSet.add(name); // roll back — the server is the source of truth
+		}
+	}
+
+	// Toggle the ACTIVE card's star — shared by the double-tap gesture AND the rail heart
+	// button (a11y / instant path). Bursts only on star-ON (the satisfying TikTok pop;
+	// un-starring just updates the heart).
+	function toggleStarredActive() {
+		const name = activeItem?.name;
+		if (!name || !settings.starred) return;
+		const want = !starredSet.has(name);
+		setStarred(name, want);
+		if (want) triggerBurst();
+	}
+
+	function triggerBurst() {
+		if (prefersReducedMotion()) return; // honor reduced-motion (#4 precedent)
+		burstTick++; // re-key the overlay so a rapid repeat replays the animation
+		bursting = true;
+		clearTimeout(burstTimer);
+		burstTimer = setTimeout(() => (bursting = false), 650);
+	}
+
+	// Approach B (operator-locked): the double-tap-to-favorite detector is a PURE ADDITIVE
+	// wrapper around tapActive — it does NOT defer or alter the single tap. tapActive runs
+	// FIRST, synchronously + byte-identical (so the cure's in-gesture bless is untouched);
+	// THEN we additively detect the 2nd tap of a double on the SAME active card and star it
+	// + burst. The two play/pause toggles of a double net out to a momentary pulse, masked
+	// by the burst (the accepted trade vs Approach A's laggy single tap). Touch taps route
+	// here; the keyboard Space path stays on tapActive (the rail heart is its a11y route).
+	function onTapGesture() {
+		tapActive(); // ← unchanged single-tap path, first + synchronous (cure-critical)
+		if (!settings.starred) return;
+		const name = activeItem?.name;
+		if (!name) return;
+		const now = Date.now();
+		if (lastTapName === name && now - lastTapAt < DOUBLE_TAP_MS) {
+			toggleStarredActive();
+			lastTapAt = 0; // consume the pair — a 3rd quick tap starts a fresh single
+			lastTapName = null;
+		} else {
+			lastTapAt = now;
+			lastTapName = name;
+		}
+	}
+
 	function tapActive() {
 		const v = activeVideo();
 		if (!v) return;
@@ -818,6 +891,18 @@
 		autoAdvance = loadAutoAdvance(feedName, settings.autoAdvance);
 		for (const n of loadHidden(feedName)) hidden.add(n);
 
+		// Seed the starred set from the server once (the overlay for the rail heart). Decoupled
+		// from the feed manifest — a single small fetch, gated on the feature; failure is silent
+		// (the heart just starts empty). 0.8.0.
+		if (settings.starred) {
+			fetch('/api/starred')
+				.then((r) => (r.ok ? r.json() : null))
+				.then((d: { starred?: string[] } | null) => {
+					if (d?.starred) for (const n of d.starred) starredSet.add(n);
+				})
+				.catch(() => {});
+		}
+
 		// Create the persistent pool (imperative — these foreign nodes outlive any card and
 		// are reparented across cards; Svelte must not reconcile them). Listeners bound once.
 		for (let s = 0; s < POOL_SIZE; s++) {
@@ -902,6 +987,7 @@
 			clearTimeout(undoTimer);
 			clearTimeout(modeTimer);
 			clearTimeout(copyTimer);
+			clearTimeout(burstTimer);
 			clearInterval(debugTimer);
 			for (const url in prewarmControllers) prewarmControllers[url].abort(); // #5d cleanup
 			for (const v of pool) {
@@ -997,7 +1083,7 @@
 						onslot={(el) => registerSlot(item.name, el)}
 						onseek={seekActiveFrac}
 						onseekby={seekActiveBy}
-						ontap={tapActive}
+						ontap={onTapGesture}
 					/>
 				{:else}
 					<div class="card-rest">
@@ -1012,12 +1098,20 @@
 		{autoAdvance}
 		allowHide={settings.allowHide}
 		{infoOpen}
+		showStarred={settings.starred}
+		starred={activeItem ? starredSet.has(activeItem.name) : false}
 		onmute={toggleMute}
 		onautoadvance={toggleAutoAdvance}
+		onstar={toggleStarredActive}
 		onshare={() => share(activeItem)}
 		oninfo={toggleInfo}
 		onhide={() => hide(activeItem?.name)}
 	/>
+	{#if bursting}
+		{#key burstTick}
+			<div class="burst" aria-hidden="true"><Heart size={96} fill="currentColor" /></div>
+		{/key}
+	{/if}
 	{#if infoOpen && activeItem}
 		{@const infoSize = activeItem.size ?? sizeByName[activeItem.name]}
 		<div class="info-overlay">
@@ -1077,6 +1171,43 @@
 	}
 	:global(.pool-video.contain) {
 		object-fit: contain;
+	}
+
+	/* Double-tap-to-favorite burst (0.8.0): a centered heart that pops + fades, TikTok-
+	   style. Fixed + pointer-events:none so it floats over the active card without
+	   intercepting taps; only shown on star-ON, and skipped entirely under
+	   prefers-reduced-motion (triggerBurst returns early). The {#key} remount replays the
+	   animation on a rapid repeat. */
+	.burst {
+		position: fixed;
+		inset: 0;
+		z-index: 11;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: #ff2d55;
+		pointer-events: none;
+		filter: drop-shadow(0 2px 16px rgba(0, 0, 0, 0.5));
+		animation: burst 0.65s ease-out forwards;
+	}
+
+	@keyframes burst {
+		0% {
+			transform: scale(0.4);
+			opacity: 0;
+		}
+		25% {
+			transform: scale(1.15);
+			opacity: 0.95;
+		}
+		55% {
+			transform: scale(1);
+			opacity: 0.9;
+		}
+		100% {
+			transform: scale(1.05);
+			opacity: 0;
+		}
 	}
 
 	.empty {
