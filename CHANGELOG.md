@@ -4,6 +4,33 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.8.3 — server-side hide (cross-device) + media symlink hardening
+
+Promotes "hide from feed" from a browser-local mark to a server-persisted,
+cross-device one (mirroring the 0.8.0 starred subsystem), and closes a symlink-escape
+on the byte route. The playback/cure machine and the byte-serve (Range) path are
+unchanged; the feed exclusion is in-memory and adds no per-file work, so the 0.7.0
+cheap-scan stays cheap.
+
+- **Hidden videos persist server-side, gated on a writable volume.** A single
+  `hidden.json` under `DATA_DIR` (atomic tmp+rename, serialized write-queue,
+  in-memory cache — the same discipline as `starred.json`), exposed via
+  `GET /api/hidden` and idempotent `PUT`/`DELETE /api/hidden/<name>`. With no
+  `DATA_DIR` the feature is inert and the hide stays browser-local, exactly as before.
+- **The feed excludes hidden items server-side.** `/api/feed` and the SSR page
+  filter the manifest through an in-memory hidden set (zero filesystem cost; a no-op
+  identity when nothing is hidden, so the response is byte-identical to 0.8.2 on a
+  feed with no hides). The favorite cheap-scan stays ~30ms.
+- **The hide button persists + syncs.** Hiding a clip optimistically removes it
+  locally and `PUT`s to the server; undo `DELETE`s; on load the client seeds from
+  `GET /api/hidden`, so a clip hidden on one device stays hidden on another.
+  Best-effort (a failed write just isn't persisted); the local-only localStorage
+  hide remains the fallback when the feature is off.
+- **Security: `/api/media` no longer follows symlinks out of `VIDEO_DIR`.** The byte
+  route now `lstat`s (not `stat`s) and rejects symlinks → 404, so a link planted in
+  the source dir can't stream an out-of-dir file. Mirrors the poster route's existing
+  guard; the Range byte math is unchanged.
+
 ## 0.8.2 — portrait-clip cropping fix (landscape/desktop)
 
 Resolves a cropping regression: a portrait clip on a landscape/desktop viewport was
