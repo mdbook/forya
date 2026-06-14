@@ -4,6 +4,24 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.8.2 — portrait-clip cropping fix (landscape/desktop)
+
+Resolves a cropping regression: a portrait clip on a landscape/desktop viewport was
+filled edge-to-edge (`cover`), chopping its top and bottom, instead of letterboxing.
+Presentation-only — the playback/cure machine and the byte-serve (Range) path are
+byte-for-byte unchanged; `fit.ts`/`pickFit` are untouched.
+
+- **The fit decision now reads the element's own intrinsic dimensions.** The 0.7.0
+  cheap-scan feeds (favorite, and liked until POSTERS warms) carry no `width`/`height`
+  in the manifest, so `applyFit`'s `pickFit(item.width, …)` fell through the
+  unknown-dims guard and returned `cover` — cropping a portrait clip on a wide
+  viewport. `applyFit` now prefers the pooled `<video>`'s own `videoWidth`/`videoHeight`
+  (falling back to the manifest dims), and the existing `loadedmetadata` listener
+  re-fits the slot once the real dimensions are known. Correct fit on every feed at
+  zero server cost.
+- **Pre-existing since 0.7.0** (the cheap scan dropped intrinsic dims for non-poster
+  feeds): consistent on desktop, occasional on mobile for off-aspect clips.
+
 ## 0.8.1 — play/pause flicker fix (iOS tap-highlight)
 
 Resolves the "brief flicker on a play/pause tap" tracked as a known issue in
