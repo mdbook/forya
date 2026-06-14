@@ -11,13 +11,16 @@ import { enqueueGeneration } from '$lib/server/worker';
 // touches the Range path. Generation is the M4 worker's job; this handler only
 // READS the cache, so it can't stall serving or spawn ffmpeg.
 //
-// Safety: `config.dataDir` empty → the feature is off → 204 (identical to a build
-// without it). The name is resolved with the same `safeMediaPath` guard as the
-// media route (no traversal), then `lstat`'d so a symlink planted in VIDEO_DIR is
-// rejected rather than followed out of the dir (F7). Any error degrades to 204 —
-// never a 500, never a stall.
+// Safety: POSTERS off (`!config.posters`) → the feature is off → 204 (identical to
+// a build without it). 0.8.0: gates on the POSTERS feature, NOT the bare DATA_DIR
+// volume — a feed with a volume only for `starred` (POSTERS off) 204s here and never
+// reaches `enqueueGeneration`, so it spawns ZERO ffmpeg (this route is the worker's
+// only trigger — there is no boot bulk-encode). The name is resolved with the same
+// `safeMediaPath` guard as the media route (no traversal), then `lstat`'d so a
+// symlink planted in VIDEO_DIR is rejected rather than followed out of the dir (F7).
+// Any error degrades to 204 — never a 500, never a stall.
 export const GET: RequestHandler = async ({ params, url }) => {
-	if (!config.dataDir) return new Response(null, { status: 204 });
+	if (!config.posters) return new Response(null, { status: 204 });
 
 	const name = params.name;
 	const full = safeMediaPath(name, config.videoDir);

@@ -7,14 +7,15 @@
 //   - fire-and-forget: `enqueueGeneration` returns immediately; generation runs
 //     OFF any request path (the ffmpeg spawn is never awaited in a handler)
 //   - lazy: kicked by /api/poster on a cache MISS — there is NO boot bulk-encode
-//   - no-op when DATA_DIR is off
+//   - no-op when POSTERS is off (0.8.0: the feature gate, not the bare volume)
 import { config } from './config';
-import { cacheEnabled } from './dataCache';
 import { generateMeta, readMeta, type ProbeRunner } from './probe';
 import { generatePoster, readPoster, type PosterRunner } from './poster';
 
 interface GenOpts {
 	dataDir?: string;
+	/** Override the POSTERS-feature gate (default `config.posters`) — for tests. */
+	postersEnabled?: boolean;
 	metaRunner?: ProbeRunner;
 	posterRunner?: PosterRunner;
 }
@@ -47,8 +48,12 @@ export function enqueueGeneration(
 	filePath: string,
 	opts: GenOpts = {}
 ): boolean {
-	const dataDir = opts.dataDir ?? config.dataDir;
-	if (!cacheEnabled(dataDir)) return false;
+	// Gate on the POSTERS FEATURE (0.8.0), not the bare volume: a feed with a
+	// DATA_DIR only for `starred` (POSTERS off) must never generate posters/meta. In
+	// production /api/poster already 204s before reaching here when posters are off;
+	// this is the defence-in-depth backstop (and the unit-test seam).
+	const postersEnabled = opts.postersEnabled ?? config.posters;
+	if (!postersEnabled) return false;
 	const key = jobKey(name, mtimeMs);
 	if (pending.has(key) || queue.length >= MAX_QUEUE) return false;
 	pending.add(key);

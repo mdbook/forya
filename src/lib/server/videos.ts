@@ -47,12 +47,13 @@ export function isHidden(name: string): boolean {
 // serves empty + `warming:true`; the client polls until the first background
 // scan lands (~1-2s) — never a blocking 24s request, and no persistence needed.
 //
-// The background scan is cheap (Approach B): on feeds WITHOUT the poster/meta
-// cache (DATA_DIR unset — the big liked/favorite feeds) it is one `readdir` with
-// NO per-file stat, dropping `size`/`mtime` that nothing there consumes (posters
-// off → no cache key; the UI shuffles → mtime order discarded; `size` is lazy-
-// fetched for the single open info card). On the poster feed (best) we keep the
-// full stat — `mtime` is the poster/meta cache key. Base order is by NAME (a
+// The background scan is cheap (Approach B): on feeds with POSTERS off (the big
+// liked/favorite feeds — which may still have a DATA_DIR for `starred`, 0.8.0) it
+// is one `readdir` with NO per-file stat, dropping `size`/`mtime` that nothing
+// there consumes (posters off → no cache key; the UI shuffles → mtime order
+// discarded; `size` is lazy-fetched for the single open info card). On a POSTERS
+// feed (best) we keep the full stat — `mtime` is the poster/meta cache key. Base
+// order is by NAME (a
 // stable total order over unique filenames) so SSR + /api/feed seeded-shuffle
 // paging stay coherent WITHOUT depending on mtime.
 // ---------------------------------------------------------------------------
@@ -156,12 +157,16 @@ async function doScan(
  * scan and returns the items. Request handlers must use `getFeed()` instead (which
  * never awaits a CIFS scan). Single-flight: concurrent callers share one scan; a
  * stable directory (unchanged mtime) reuses the cache without re-walking.
- * `cheap` defaults to "poster feature off" (DATA_DIR unset) — the readdir-only path.
+ * `cheap` defaults to "poster feature off" (`!config.posters`) — the readdir-only
+ * path. NOTE (0.8.0): the gate is the POSTERS feature, NOT the bare DATA_DIR volume.
+ * A feed can have a `DATA_DIR` (for `starred`) yet `POSTERS` off → it STAYS cheap,
+ * so adding a volume for `starred` can't silently undo the 0.7.0 cheap-scan win.
+ * Full stat only where posters need the `mtime` cache key (`config.posters`).
  */
 export async function scanVideos(
 	videoDir: string = config.videoDir,
 	ignoreHidden: boolean = config.ignoreHidden,
-	cheap: boolean = config.dataDir === ''
+	cheap: boolean = !config.posters
 ): Promise<FeedItem[]> {
 	const key = `${videoDir} ${ignoreHidden}`;
 
@@ -232,7 +237,7 @@ function scheduleRevalidate(videoDir: string, ignoreHidden: boolean, cheap: bool
 export function getFeed(
 	videoDir: string = config.videoDir,
 	ignoreHidden: boolean = config.ignoreHidden,
-	cheap: boolean = config.dataDir === ''
+	cheap: boolean = !config.posters
 ): FeedResult {
 	const key = `${videoDir} ${ignoreHidden}`;
 	scheduleRevalidate(videoDir, ignoreHidden, cheap);

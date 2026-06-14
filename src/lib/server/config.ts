@@ -19,6 +19,13 @@ function parseInt10(value: string | undefined, fallback: number): number {
 	return Number.isFinite(n) ? n : fallback;
 }
 
+// DATA_DIR is the writable-volume signal — the PREREQUISITE for any persisted
+// feature (posters, meta, starred), but on its own it implies NONE of them. We
+// derive it once here so the feature gates below can key off it. (0.8.0 decoupled
+// "has a volume" from "generate posters" so adding a volume for `starred` can't
+// silently turn on 20k-clip poster-gen NOR flip the 0.7.0 cheap-scan to full-stat.)
+const dataDir = env.DATA_DIR ?? '';
+
 export const config = {
 	/** `:ro` input dir scanned for videos. */
 	videoDir: env.VIDEO_DIR ?? '/srv/videos',
@@ -43,7 +50,18 @@ export const config = {
 	 *  nothing is written anywhere, so the response surface is byte-identical to a
 	 *  build without it (the source `VIDEO_DIR` stays `:ro` regardless). Set = forya
 	 *  generates + caches posters/metadata under here, writing ONLY here. */
-	dataDir: env.DATA_DIR ?? '',
+	dataDir,
+	/** Poster + metadata GENERATION/serving (0.5; RE-GATED 0.8.0). On iff there's a
+	 *  volume AND explicit opt-in: `DATA_DIR` set AND `POSTERS` truthy (default OFF).
+	 *  Default-off is fail-safe — a feed that gains `DATA_DIR` only for `starred`
+	 *  never auto-storms ffmpeg over its library, and the 0.7.0 cheap-scan stays cheap
+	 *  (the scan keys `cheap = !config.posters`, NOT on the bare volume). `best` opts
+	 *  in with `POSTERS=1`; `liked`/`favorite` get a volume without it. */
+	posters: dataDir !== '' && parseBool(env.POSTERS, false),
+	/** The `starred` (favorite-mark) feature (0.8.0). A single small JSON doc with no
+	 *  generation, so it gates on the raw volume ALONE — works on every feed that has
+	 *  a `DATA_DIR`, independent of `POSTERS`. */
+	starred: dataDir !== '',
 	/** Diagnostic playback overlay (0.5.4 instrumentation). Default OFF → entirely
 	 *  inert in prod (the overlay is gated client-side on this flag and emits no
 	 *  events when off). Set `DEBUG_PLAYBACK=1` on an instance to surface a live

@@ -52,10 +52,13 @@ export interface FeedSettings {
 	preloadBehind: number;
 	/** Initial autoplay-next preference (AUTO_ADVANCE). */
 	autoAdvance: boolean;
-	/** Whether generated posters are available (DATA_DIR set, 0.5). When false the
-	 *  client never requests `/api/poster`, so a disabled instance makes no extra
-	 *  requests. */
+	/** Whether generated posters are available (the POSTERS feature on — DATA_DIR set
+	 *  AND POSTERS opt-in, 0.5/re-gated 0.8.0). When false the client never requests
+	 *  `/api/poster`, so a disabled instance makes no extra requests. */
 	posters: boolean;
+	/** Whether the `starred` (favorite-mark) feature is available (DATA_DIR set,
+	 *  0.8.0). When false the client hides the heart UI and the double-tap is inert. */
+	starred: boolean;
 	/** Diagnostic playback overlay (DEBUG_PLAYBACK, 0.5.4). Default false → the
 	 *  overlay never renders and VideoCard emits no debug events. */
 	debugPlayback: boolean;
