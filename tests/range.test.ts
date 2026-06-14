@@ -223,6 +223,27 @@ describe('GET|HEAD /api/media/[name]', () => {
 		await expect(GET(event(probe))).rejects.toMatchObject({ status: 404 });
 	});
 
+	it('adversarial #1: a symlink in VIDEO_DIR → 404 (lstat-reject), never followed out of dir', async () => {
+		// safeMediaPath is purely LEXICAL: an in-dir NAME (`evil.mp4`, no `..`/separator)
+		// whose symlink TARGET escapes VIDEO_DIR passes it. The route must `lstat`-reject the
+		// symlink so the byte path never streams the out-of-dir file with Range support. The
+		// live `:ro` library can't be symlink-planted, so this fixture is the ONLY regression
+		// guard (review #936 HARD gate).
+		const outside = path.join(process.cwd(), 'tests', '.tmp-outside');
+		await fsp.mkdir(outside, { recursive: true });
+		const secret = path.join(outside, 'secret.txt');
+		await fsp.writeFile(secret, 'TOP SECRET — must never be streamed');
+		const link = path.join(VIDEO_DIR, 'evil.mp4'); // in-dir name, target escapes
+		await fsp.symlink(secret, link);
+		try {
+			await expect(GET(event('evil.mp4'))).rejects.toMatchObject({ status: 404 });
+			await expect(HEAD(event('evil.mp4'))).rejects.toMatchObject({ status: 404 });
+		} finally {
+			await fsp.rm(link, { force: true });
+			await fsp.rm(outside, { recursive: true, force: true });
+		}
+	});
+
 	// 0.7.0: the cheap (readdir-only) feed manifest now OMITS size/mtime on poster-
 	// off feeds, so the byte-serve path must stay wholly independent of the manifest
 	// — it computes every header from the file's OWN stat. These lock that contract

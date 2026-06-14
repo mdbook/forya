@@ -21,11 +21,21 @@ async function statFile(name: string) {
 	if (full === null) error(404, 'not found'); // traversal / bad name → no leak
 	let st: fs.Stats;
 	try {
-		st = await fsp.stat(full);
+		// lstat, NOT stat (adversarial #1): `stat` FOLLOWS a symlink, so a planted
+		// `clip.mp4 -> /etc/passwd` (an in-dir NAME whose TARGET escapes VIDEO_DIR) would
+		// pass the purely-lexical `safeMediaPath` and the byte path would stream the
+		// out-of-dir file with full Range support. `lstat` stats the LINK itself, so the
+		// symlink check below rejects it. Mirrors the poster route's F7 guard; the feed
+		// scan already excludes symlinks (videos.ts), so no legitimate item is one.
+		st = await fsp.lstat(full);
 	} catch {
 		error(404, 'not found');
 	}
-	if (!st.isFile()) error(404, 'not found');
+	// Regular file only — reject symlinks (and dirs/sockets/etc.) so the byte path can
+	// never follow a link out of the `:ro` VIDEO_DIR. For a regular file `lstat` === `stat`,
+	// so the size/mtime that feed resolveRange/weakETag/baseHeaders below are unchanged
+	// (serving-four stays byte-identical; this is a route-level guard, not a math change).
+	if (st.isSymbolicLink() || !st.isFile()) error(404, 'not found');
 	return { full, st };
 }
 
