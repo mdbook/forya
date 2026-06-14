@@ -647,14 +647,30 @@
 
 	// ── Starred / favorite mark (0.8.0) ──────────────────────────────────────────────
 	// Client-side reactive set (mirrors `hidden`): the single source of truth for the
-	// rail heart's filled state + the double-tap burst. Seeded from GET /api/starred on
+	// rail heart's filled state + the gesture feedback. Seeded from GET /api/starred on
 	// mount (when the feature is on) and updated OPTIMISTICALLY on toggle, with a
 	// PUT/DELETE to persist (rolled back on failure). Fully decoupled from the feed
 	// manifest — a mark never rescans or touches the pooled-<video> machine.
 	const starredSet = new SvelteSet<string>();
-	const DOUBLE_TAP_MS = 280;
+	// M6 gesture state machine (operator-locked, review-gated C1–C5). ONE window (review
+	// #733 — collapsed from two near-equal constants): a tap within SEQ_WINDOW_MS of the
+	// prior on the SAME active card continues the sequence; that much silence ends it.
+	// tap-2 = ONE toggle (like OR unlike) + reconcile play/pause + heart; taps 3+ = heart-
+	// only, HOLD the committed state (no re-toggle, no play/pause flicker); 300ms silence
+	// (operator's number) resets → the next double-tap toggles the other way (double-tap-to-
+	// unlike restored). Tune on-device.
+	const SEQ_WINDOW_MS = 300;
 	let lastTapAt = 0;
 	let lastTapName: string | null = null;
+	let inLikeSeq = false; // a toggle is committed for this burst → further taps are heart-only
+	let seqName: string | null = null;
+	let seqStarred = false; // the burst's committed state (hearts spawn only while liked)
+	let seqPrePaused = false; // C1: play state read BEFORE tap-1, the reconcile target
+	let seqTimer: ReturnType<typeof setTimeout> | undefined;
+	let hearts = $state<{ id: number; x: number; y: number }[]>([]);
+	let heartId = 0;
+	// Non-reactive: pending heart self-removal timers, tracked only to clear on unmount.
+	let heartTimers: ReturnType<typeof setTimeout>[] = [];
 	let burstTick = $state(0);
 	let bursting = $state(false);
 	let burstTimer: ReturnType<typeof setTimeout> | undefined;
@@ -675,15 +691,20 @@
 		}
 	}
 
-	// Toggle the ACTIVE card's star — shared by the double-tap gesture AND the rail heart
-	// button (a11y / instant path). Bursts only on star-ON (the satisfying TikTok pop;
-	// un-starring just updates the heart).
-	function toggleStarredActive() {
+	// Toggle the ACTIVE card's star → returns the NEW state. Shared by the gesture (tap-2)
+	// and the rail heart button. The CALLER owns the feedback visual (rail → centered burst,
+	// no tap point; gesture → tap-point hearts) so each input modality reads right.
+	function toggleStarredActive(): boolean {
 		const name = activeItem?.name;
-		if (!name || !settings.starred) return;
+		if (!name || !settings.starred) return false;
 		const want = !starredSet.has(name);
 		setStarred(name, want);
-		if (want) triggerBurst();
+		return want;
+	}
+
+	// The rail heart button's like path: toggle + the centered burst on star-ON (no tap point).
+	function onRailStar() {
+		if (toggleStarredActive()) triggerBurst();
 	}
 
 	function triggerBurst() {
@@ -694,27 +715,94 @@
 		burstTimer = setTimeout(() => (bursting = false), 650);
 	}
 
-	// Approach B (operator-locked): the double-tap-to-favorite detector is a PURE ADDITIVE
-	// wrapper around tapActive — it does NOT defer or alter the single tap. tapActive runs
-	// FIRST, synchronously + byte-identical (so the cure's in-gesture bless is untouched);
-	// THEN we additively detect the 2nd tap of a double on the SAME active card and star it
-	// + burst. The two play/pause toggles of a double net out to a momentary pulse, masked
-	// by the burst (the accepted trade vs Approach A's laggy single tap). Touch taps route
-	// here; the keyboard Space path stays on tapActive (the rail heart is its a11y route).
-	function onTapGesture() {
-		tapActive(); // ← unchanged single-tap path, first + synchronous (cure-critical)
-		if (!settings.starred) return;
-		const name = activeItem?.name;
-		if (!name) return;
-		const now = Date.now();
-		if (lastTapName === name && now - lastTapAt < DOUBLE_TAP_MS) {
-			toggleStarredActive();
-			lastTapAt = 0; // consume the pair — a 3rd quick tap starts a fresh single
-			lastTapName = null;
-		} else {
-			lastTapAt = now;
-			lastTapName = name;
+	// Spawn a transient heart at the tap point (TikTok-style spam feedback). PURE VISUAL —
+	// touches nothing in the play/muted/bless machinery (C-safe). Reduced-motion-skipped;
+	// self-removes after the float.
+	function spawnHeart(e?: MouseEvent) {
+		if (prefersReducedMotion()) return;
+		const x = e?.clientX ?? (typeof window !== 'undefined' ? window.innerWidth / 2 : 0);
+		const y = e?.clientY ?? (typeof window !== 'undefined' ? window.innerHeight / 2 : 0);
+		const id = heartId++;
+		hearts = [...hearts, { id, x, y }];
+		const t = setTimeout(() => {
+			hearts = hearts.filter((h) => h.id !== id);
+			heartTimers = heartTimers.filter((x) => x !== t);
+		}, 800);
+		heartTimers.push(t);
+	}
+
+	// Reconcile play/pause to `targetPaused` (the pre-gesture state) using ONLY the existing
+	// primitives (v.pause() / tryPlayActive) — no new play path, no raw v.play(). In-gesture on
+	// the blessed active element (D-safe). Makes the double-tap's END play state DETERMINISTIC
+	// (net-no-op) regardless of how many tapActive toggles fired (C2).
+	function reconcilePlayState(targetPaused: boolean) {
+		const v = activeVideo();
+		if (!v) return;
+		if (targetPaused && !v.paused) {
+			v.pause();
+			activePaused = true;
+		} else if (!targetPaused && v.paused) {
+			activePaused = false;
+			activeBlocked = false;
+			tryPlayActive(v);
 		}
+	}
+
+	function endLikeSeq() {
+		inLikeSeq = false;
+		seqName = null;
+	}
+	function armSeqTimer() {
+		clearTimeout(seqTimer);
+		seqTimer = setTimeout(endLikeSeq, SEQ_WINDOW_MS);
+	}
+
+	// M6 (operator-locked): single-tap = play/pause; double-tap = TOGGLE the star (like OR
+	// unlike); spam = one toggle + a heart per tap, no flicker. ADDITIVE over tapActive —
+	// tap-1 runs tapActive() FIRST, synchronous + byte-identical (the cure's in-gesture bless
+	// is untouched). The like-sequence is additive flag+timer state; taps 3+ and the idle-exit
+	// call ZERO play()/tapActive() (C3). Touch taps route here; the keyboard Space path stays
+	// on tapActive (the rail heart is its a11y route).
+	function onTapGesture(e?: MouseEvent) {
+		const name = activeItem?.name;
+		const now = Date.now();
+
+		// Mid-sequence (a toggle already committed this burst): every further rapid tap on the
+		// same card is HEART-ONLY — no tapActive, no play/pause, no re-toggle (C3). Hearts only
+		// while the burst is committed to LIKED (un-liking a card spawns no like-hearts).
+		if (settings.starred && inLikeSeq && seqName === name && now - lastTapAt < SEQ_WINDOW_MS) {
+			lastTapAt = now;
+			if (seqStarred) spawnHeart(e);
+			armSeqTimer();
+			return;
+		}
+
+		// Is this the 2nd tap of a double (within the window, same card, not already in a seq)?
+		const isDouble =
+			settings.starred &&
+			!!name &&
+			lastTapName === name &&
+			now - lastTapAt < SEQ_WINDOW_MS &&
+			!inLikeSeq;
+
+		// C1: BARE synchronous pre-state read BEFORE tapActive() — side-effect-free, cannot
+		// throw, so it can never skip the bless. Captured on a FRESH tap (tap-1), reused as the
+		// reconcile target when the double lands. NOT inferred by inverting the post-tap state.
+		if (!isDouble) seqPrePaused = activeVideo()?.paused ?? activePaused;
+
+		// tap-1 / single-tap: ALWAYS first, synchronous + byte-identical (bless + play/pause).
+		tapActive();
+
+		if (isDouble) {
+			inLikeSeq = true;
+			seqName = name;
+			seqStarred = toggleStarredActive(); // the ONE toggle (like OR unlike)
+			reconcilePlayState(seqPrePaused); // net-no-op: undo the double's play/pause churn
+			if (seqStarred) spawnHeart(e); // hearts only when the burst committed to LIKED
+			armSeqTimer();
+		}
+		lastTapAt = now;
+		lastTapName = name;
 	}
 
 	function tapActive() {
@@ -988,6 +1076,8 @@
 			clearTimeout(modeTimer);
 			clearTimeout(copyTimer);
 			clearTimeout(burstTimer);
+			clearTimeout(seqTimer);
+			for (const t of heartTimers) clearTimeout(t);
 			clearInterval(debugTimer);
 			for (const url in prewarmControllers) prewarmControllers[url].abort(); // #5d cleanup
 			for (const v of pool) {
@@ -1102,7 +1192,7 @@
 		starred={activeItem ? starredSet.has(activeItem.name) : false}
 		onmute={toggleMute}
 		onautoadvance={toggleAutoAdvance}
-		onstar={toggleStarredActive}
+		onstar={onRailStar}
 		onshare={() => share(activeItem)}
 		oninfo={toggleInfo}
 		onhide={() => hide(activeItem?.name)}
@@ -1112,6 +1202,11 @@
 			<div class="burst" aria-hidden="true"><Heart size={96} fill="currentColor" /></div>
 		{/key}
 	{/if}
+	{#each hearts as h (h.id)}
+		<div class="tap-heart" style:left="{h.x}px" style:top="{h.y}px" aria-hidden="true">
+			<Heart size={52} fill="currentColor" />
+		</div>
+	{/each}
 	{#if infoOpen && activeItem}
 		{@const infoSize = activeItem.size ?? sizeByName[activeItem.name]}
 		<div class="info-overlay">
@@ -1206,6 +1301,33 @@
 		}
 		100% {
 			transform: scale(1.05);
+			opacity: 0;
+		}
+	}
+
+	/* Tap-point hearts (0.8.0 M6): one per rapid tap in a double/spam sequence, placed at the
+	   tap coordinates (fixed; translate-centered) and floated up as it fades. Fixed + pointer-
+	   events:none so it never intercepts taps; reduced-motion suppresses spawning. */
+	.tap-heart {
+		position: fixed;
+		z-index: 11;
+		color: #ff2d55;
+		pointer-events: none;
+		filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.45));
+		animation: tap-heart 0.8s ease-out forwards;
+	}
+
+	@keyframes tap-heart {
+		0% {
+			transform: translate(-50%, -50%) scale(0.3) rotate(-8deg);
+			opacity: 0;
+		}
+		20% {
+			transform: translate(-50%, -50%) scale(1.1) rotate(-8deg);
+			opacity: 0.95;
+		}
+		100% {
+			transform: translate(-50%, -90%) scale(0.95) rotate(-8deg);
 			opacity: 0;
 		}
 	}

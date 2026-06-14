@@ -52,8 +52,9 @@
 		onseek: (frac: number) => void;
 		/** Nudge the active card's pooled element by `delta` seconds (keyboard). */
 		onseekby: (delta: number) => void;
-		/** Tap the full-bleed target → Feed toggles play/pause on the active element. */
-		ontap: () => void;
+		/** Tap the full-bleed target → Feed toggles play/pause on the active element. The
+		 *  MouseEvent is forwarded so Feed can place the double-tap heart at the tap point. */
+		ontap: (e?: MouseEvent) => void;
 	} = $props();
 
 	// The manual play affordance shows for a blocked (autoplay-rejected) OR user-paused
