@@ -1036,6 +1036,12 @@
 					if (d?.hidden && d.hidden.length) {
 						for (const n of d.hidden) hidden.add(n);
 						saveHidden(feedName, hidden);
+						// Clamp activeIndex if the seed shrank the visible feed (mirror hide():574,
+						// adversarial #17). Narrow — at mount activeIndex is 0 and the server already
+						// excludes hidden names — but a feed that raced ahead of the boot-warm could
+						// shrink here; keep activeIndex in range so the active card is never stranded.
+						const count = applyHidden(allItems, hidden).length;
+						if (activeIndex >= count) activeIndex = Math.max(0, count - 1);
 					}
 				})
 				.catch(() => {});

@@ -99,6 +99,16 @@ async function loadSet(dataDir: string): Promise<Set<string>> {
 	} catch {
 		set = new Set(); // missing/unreadable → empty (not an error)
 	}
+	// Compare-and-set (concurrency, adversarial #4): `loadSet` is check-then-set with an
+	// `await` in the middle, and the boot `warmHidden` lane is NOT serialized with the
+	// `setHidden` write-queue. If a hide landed while we were reading OLD bytes off disk,
+	// the cache now holds a FRESHER set — overwriting it with our stale snapshot would
+	// not only make `hiddenSetSync` miss the just-hidden clip, it would DURABLY drop the
+	// name: the next `setHidden` reads the clobbered (non-null) cache without re-reading
+	// disk and persists the gap. So never overwrite an already-populated cache for this
+	// dir — adopt it. (Either ordering is now safe: if a write set the cache before this
+	// re-check we keep it; if after, the write's own assignment wins.)
+	if (cache && cache.dir === dataDir) return cache.set;
 	cache = { dir: dataDir, set };
 	return set;
 }
@@ -149,6 +159,10 @@ export function hiddenSetSync(dataDir: string = config.dataDir): ReadonlySet<str
  *  never throws. Called fire-and-forget at server boot (hooks.server.ts). */
 export async function warmHidden(dataDir: string = config.dataDir): Promise<void> {
 	if (dataDir === '') return;
+	// Already warmed by a read or a write? Don't reload — re-reading would re-open the
+	// `loadSet` boot-race window (adversarial #4) for no benefit. With the cache present,
+	// `loadSet` returns it immediately (no disk read), so this is the cheap fast-path.
+	if (cache && cache.dir === dataDir) return;
 	await loadSet(dataDir);
 }
 

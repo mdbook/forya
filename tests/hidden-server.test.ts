@@ -151,4 +151,24 @@ describe('hidden (server) — sync feed-exclusion reader (hiddenSetSync / warmHi
 		expect(hiddenSetSync('/some/other/data').size).toBe(0);
 		expect(hiddenSetSync('').size).toBe(0);
 	});
+
+	it('a hide racing the boot warm is NOT clobbered (adversarial #4 — no durable loss)', async () => {
+		// Pre-existing on disk; cold cache (fresh process).
+		await setHidden('keep.mp4', true, dir);
+		clearHiddenCache();
+		// warmHidden reads the OLD bytes ({keep}); a hide lands in that read window. Pre-fix,
+		// warm's stale read could overwrite the write's cache and the NEXT write would persist
+		// the gap (durable loss). Post-fix, loadSet's compare-and-set adopts the fresher cache.
+		const warm = warmHidden(dir);
+		const write = setHidden('raced.mp4', true, dir);
+		await Promise.all([warm, write]);
+		// In-mem (what the feed's hiddenSetSync reads) must hold BOTH.
+		expect(hiddenSetSync(dir).has('keep.mp4')).toBe(true);
+		expect(hiddenSetSync(dir).has('raced.mp4')).toBe(true);
+		// Durable: a subsequent write must not have dropped the raced name from disk.
+		await setHidden('after.mp4', true, dir);
+		clearHiddenCache();
+		const onDisk = await readHidden(dir);
+		expect(onDisk).toEqual(['after.mp4', 'keep.mp4', 'raced.mp4']);
+	});
 });
