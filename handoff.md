@@ -113,6 +113,36 @@ rollback.
   a names-only readdir fingerprint (count + hash, mtime-independent) — not built,
   but the drop-in replacement. The `resolveRange`/Range surface of `videos.ts` is
   untouched by all of this (0.3.2 changed only the scan/cache block).
+  - **0.7.0 — serve-stale feed + readdir-only scan (supersedes the request-path
+    scan above).** Cold `/api/feed` on liked was ~24s because the scan did one
+    `fsp.stat` **per file** (12k files × a CIFS round-trip), on the request path. A
+    bare `readdir` of the same dir is ~1.2s (SMB returns dir attrs inline with the
+    enumeration), so the per-file stats were the whole cost. Three things changed,
+    **all in the scan subsystem of `videos.ts` — the Range/byte-serve functions
+    stayed byte-identical** (review verified per-function sha256):
+    - **The request path never scans.** New `getFeed()` is what `/api/feed` and SSR
+      call (NOT `scanVideos` — that's now the background worker). It returns the
+      last-known-good manifest from memory instantly and only schedules a background
+      revalidate when due (still single-flight; throttled to `REVALIDATE_INTERVAL_MS`
+      = 30s). A cold container with no manifest returns `{ items: [], warming: true }`;
+      `+page.svelte` renders a brief warming screen and `invalidateAll()`-polls until
+      the first background scan lands (~1–2s). **No persistence, no `DATA_DIR`, no
+      compose change** — warming makes restart-cold a ~1s screen, not a 24s block.
+    - **Readdir-only on poster-off feeds (Approach B).** `doScan(..., cheap)` skips
+      the per-file stat when `config.dataDir === ''` (the big liked/favorite feeds):
+      `size`/`mtime` are left undefined. Nothing there reads them — posters are off
+      (no meta cache key) and the UI always shuffles (mtime order is discarded). The
+      poster feed (best, `DATA_DIR` set) keeps the full stat because `mtime` IS its
+      poster cache key. `FeedItem.size`/`mtime` are now **optional**.
+    - **Base order is name-asc, not mtime-desc** (the per-file stat that mtime-desc
+      needed is gone). A stable total order over unique filenames keeps SSR +
+      `/api/feed` seeded-shuffle paging coherent. Updates the 0.3.0 note above:
+      `/api/feed`'s default order is now name-asc (it's our API; no external
+      consumer depends on mtime-desc).
+    - **Info-overlay size is lazy.** With `size` off the manifest on the big feeds,
+      the info panel fetches it for the **single open card** via `HEAD /api/media`
+      (`Content-Length` = file size) — one request, on demand, never a scan
+      (`Feed.svelte` `ensureInfoSize`). The poster feed keeps the manifest `size`.
 - **Posters + metadata: forya's FIRST writable state, fully opt-in (0.5).** The
   whole subsystem is gated on **`DATA_DIR`**: unset (`config.dataDir === ''`) →
   no ffmpeg/ffprobe ever spawns, nothing is written anywhere, the manifest +
