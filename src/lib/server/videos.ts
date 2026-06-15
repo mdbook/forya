@@ -151,6 +151,16 @@ async function doScan(
 	return items;
 }
 
+/** Canonical in-process scan-cache / single-flight key. MUST include `cheap`: it
+ *  selects the output SHAPE (readdir-only vs full-stat), so two scans of the same
+ *  dir with different `cheap` are DIFFERENT cache entries — omitting it would let a
+ *  cheap scan serve a poster feed's full-stat manifest (or vice versa). All three
+ *  cache touchpoints (scanVideos / scheduleRevalidate / getFeed) key through here so
+ *  they can never drift apart. */
+function scanKey(videoDir: string, ignoreHidden: boolean, cheap: boolean): string {
+	return `${videoDir} ${ignoreHidden} ${cheap}`;
+}
+
 /**
  * Scan `videoDir` → manifest items (name-asc), updating the in-process cache.
  * This is the BACKGROUND revalidate worker (and the test seam): it blocks on the
@@ -168,7 +178,7 @@ export async function scanVideos(
 	ignoreHidden: boolean = config.ignoreHidden,
 	cheap: boolean = !config.posters
 ): Promise<FeedItem[]> {
-	const key = `${videoDir} ${ignoreHidden}`;
+	const key = scanKey(videoDir, ignoreHidden, cheap);
 
 	// Single-flight: if a scan for this dir is already running, await it. Checked
 	// before any `await` so concurrent callers can't both start a scan.
@@ -215,7 +225,7 @@ export interface FeedResult {
  *  scanVideos dedups the concurrent cold-start polls); warm → throttled to once
  *  per REVALIDATE_INTERVAL_MS. */
 function scheduleRevalidate(videoDir: string, ignoreHidden: boolean, cheap: boolean): void {
-	const key = `${videoDir} ${ignoreHidden}`;
+	const key = scanKey(videoDir, ignoreHidden, cheap);
 	const warm = scanCache !== null && scanCache.key === key;
 	if (warm && Date.now() - scanCache!.checkedAt < REVALIDATE_INTERVAL_MS) return;
 	// Mark the throttle window NOW (before the await suspends) so concurrent requests
@@ -239,7 +249,7 @@ export function getFeed(
 	ignoreHidden: boolean = config.ignoreHidden,
 	cheap: boolean = !config.posters
 ): FeedResult {
-	const key = `${videoDir} ${ignoreHidden}`;
+	const key = scanKey(videoDir, ignoreHidden, cheap);
 	scheduleRevalidate(videoDir, ignoreHidden, cheap);
 	if (scanCache && scanCache.key === key) {
 		return { items: scanCache.items, warming: false };

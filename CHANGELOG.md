@@ -4,6 +4,28 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.8.5 — cache-correctness hardening (scan-cache key + poster meta key)
+
+Two latent keying bugs from the post-0.8.4 adversarial review. Both are correctness
+fixes with no behavior change on a stable, already-warm feed; the playback/cure
+machine, the byte-serve (Range) path, and the favorite cheap-scan are byte-identical.
+
+- **The scan cache now keys on `cheap` (the output shape).** The in-process scan
+  cache / single-flight key omitted `cheap`, which selects whether a scan returns the
+  readdir-only shape (no per-file stat) or the full-stat shape (size + mtime). A cheap
+  and a full-stat scan of the same directory shared one cache entry, so the second
+  caller could receive the first's wrong-shape manifest. All three cache touchpoints
+  now key through one `scanKey(videoDir, ignoreHidden, cheap)` helper so they cannot
+  drift apart.
+- **Poster/metadata generation keys on the file's authoritative mtime.** The poster
+  route generated under the client-supplied `?v=` manifest mtime, but the scan/probe
+  path reads the cached meta + poster back under the file's real mtime. On a re-encoded
+  or re-synced clip the two diverged, giving a permanent read-miss: no intrinsic
+  dimensions (layout shift / wrong fit) and imageless share-link cards. Generation now
+  uses the file's `lstat` mtime; the serve attempt still honors the `?v=` fast path.
+  Latency-neutral (no new per-request I/O). This also re-warms the 0.8.4 share-card
+  posters, since `/share/<token>/poster` reads under the same mtime.
+
 ## 0.8.4 — share links (off-network, scheme B capability tokens)
 
 Adds a per-clip share link that resolves OFF the LAN: tap share on a clip and send
