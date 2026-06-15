@@ -35,15 +35,22 @@ export const GET: RequestHandler = async ({ params, url }) => {
 		return new Response(null, { status: 204 });
 	}
 
-	// Prefer the client-supplied manifest mtime (`?v=`); fall back to the stat.
+	// `key` is the SERVE-attempt cache key: prefer the client-supplied manifest mtime
+	// (`?v=`) so a fresh manifest hits its cached poster directly; fall back to the stat.
 	const v = Number(url.searchParams.get('v'));
 	const key = Number.isFinite(v) && v > 0 ? v : mtimeMs;
 
 	const poster = await readPoster(name, key);
 	if (!poster) {
-		// Lazy generation: kick the worker (fire-and-forget, OFF this response) so
-		// the poster is ready on a later request, then degrade to the placeholder.
-		enqueueGeneration(name, key, full);
+		// Lazy generation: kick the worker (fire-and-forget, OFF this response) so the
+		// poster is ready on a later request, then degrade to the placeholder.
+		// #3 (0.8.5): GENERATE under the AUTHORITATIVE file mtime (`mtimeMs`), NOT the
+		// client `?v=` (`key`). The scan/probe path reads meta+poster under the file's
+		// real mtime (probe.ts → readMeta(name, it.mtime)), so generating under a stale
+		// `?v=` (a re-encoded/re-synced clip) writes to the wrong key → permanent
+		// read-miss (CLS + imageless share cards). Latency-neutral: `mtimeMs` is the
+		// lstat above — no new I/O. The serve attempt still uses `key` (the fast path).
+		enqueueGeneration(name, mtimeMs, full);
 		return new Response(null, { status: 204 });
 	}
 
