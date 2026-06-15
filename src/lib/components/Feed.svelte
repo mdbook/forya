@@ -189,13 +189,18 @@
 	// width/height — so manifest-only `pickFit(0,0,…)` hit the unknown-dims guard and returned
 	// `cover`, top/bottom-cropping a portrait clip on a landscape/desktop viewport. The pooled
 	// <video> always knows its real dims once `loadedmetadata` fires; fall back to the manifest
-	// for the pre-metadata call (src-swap), then the loadedmetadata listener re-fits with truth.
-	function applyFit(v: HTMLVideoElement, item: FeedItem) {
-		const f = pickFit(
-			v.videoWidth || item.width || 0,
-			v.videoHeight || item.height || 0,
-			viewportAR
-		);
+	// for the pre-metadata call, then the loadedmetadata listener re-fits with truth.
+	// 0.8.6 (#5): on a RECYCLE src-swap the element still holds the OUTGOING clip's
+	// videoWidth/Height — it is NOT emptied synchronously when `src` is reassigned — so a
+	// truthy-stale dim would win over the incoming clip's manifest dims and paint a transient
+	// WRONG fit (cover/contain inverted on orientation-heterogeneous neighbours) until
+	// `loadedmetadata`. `useElementDims=false` forces the manifest dims on that path (the
+	// element's own dims are about to be discarded anyway); loadedmetadata then re-fits with the
+	// new clip's real dims. The active/rotation re-fits keep the default (real, loaded dims).
+	function applyFit(v: HTMLVideoElement, item: FeedItem, useElementDims = true) {
+		const ew = useElementDims ? v.videoWidth : 0;
+		const eh = useElementDims ? v.videoHeight : 0;
+		const f = pickFit(ew || item.width || 0, eh || item.height || 0, viewportAR);
 		v.classList.toggle('contain', f === 'contain');
 	}
 
@@ -420,7 +425,10 @@
 				}
 				v.classList.remove('revealed');
 				v.loop = !autoAdvance;
-				applyFit(v, item);
+				// #5 (0.8.6): manifest dims only — `v.videoWidth` is still the OUTGOING clip's
+				// here (not emptied until the new src loads), so trusting it would paint a
+				// transient wrong fit. loadedmetadata re-fits with the incoming clip's real dims.
+				applyFit(v, item, false);
 				v.src = item.url;
 				// Re-assert muted AFTER the src-swap (some iOS reset muted to the attribute
 				// default — unset = unmuted — on swap). muted=true is the safe default: on an
