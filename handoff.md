@@ -195,6 +195,24 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.8.5 — cache-key correctness (scan-cache `cheap` + poster mtime)
+
+Two keying bugs from the post-0.8.4 adversarial review (#2, #3). Gotchas:
+
+- **Any in-process scan-cache key MUST include `cheap`.** `cheap` selects the output
+  SHAPE (readdir-only vs full-stat size+mtime). The key lives at THREE sites (scanVideos
+  / scheduleRevalidate / getFeed); they are now funnelled through one `scanKey()` helper
+  so a future edit cannot fix one site and desync the others (which would silently serve
+  a stale-shape cache). A test must exercise BOTH shapes against ONE dir WITHOUT
+  `clearScanCache` between scans to catch cross-shape bleed — clearing hides the bug.
+- **Poster/meta storage is keyed on the file's authoritative `lstat` mtime, not the
+  client `?v=`.** `/api/poster` writes via `enqueueGeneration(name, mtimeMs, ...)`; the
+  scan/probe read path (`probe.ts` reads `readMeta(name, it.mtime)`) and the unauth
+  `/share/<token>/poster` route both read under that same file mtime. The `?v=` query
+  param is only the SERVE-attempt fast-path key, never the storage key — generating
+  under it broke on re-encoded clips (write-key not equal to read-key → permanent miss
+  → CLS + imageless share cards).
+
 ## 0.8.4 — share links (scheme B capability tokens + OG link-card + storage gate)
 
 A per-clip, off-LAN share link. Load-bearing context the code alone won't tell you:
