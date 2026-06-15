@@ -146,6 +146,24 @@ describe('scanVideos caching (0.3.2: dir-mtime invalidation + single-flight)', (
 		const [a, b] = await Promise.all([scanVideos(dir, true), scanVideos(dir, true)]);
 		expect(b).toBe(a); // both awaited the same in-flight scan
 	});
+
+	it('keys the cache on `cheap` → no cross-shape bleed for one dir (no clearScanCache between)', async () => {
+		await write('a.mp4', 100);
+		// cheap=true → readdir-only shape: no per-file stat, so size/mtime are absent.
+		const cheapItems = await scanVideos(dir, true, true);
+		expect(cheapItems[0].size).toBeUndefined();
+		expect(cheapItems[0].mtime).toBeUndefined();
+		// SAME dir, cheap=false, WITHOUT clearing the cache. The #2 bug: the key omitted
+		// `cheap`, so this hit the cached cheap entry and returned the wrong (cheap) SHAPE.
+		// With `cheap` in the key it's a distinct entry → a real full-stat scan runs.
+		const fullItems = await scanVideos(dir, true, false);
+		expect(fullItems).not.toBe(cheapItems); // distinct cache entry, not the cheap one
+		expect(fullItems[0].size).toBe(100); // full shape: size present
+		expect(typeof fullItems[0].mtime).toBe('number'); // full shape: mtime present
+		// re-requesting the cheap shape still yields the cheap shape (no bleed back either way)
+		const cheapAgain = await scanVideos(dir, true, true);
+		expect(cheapAgain[0].size).toBeUndefined();
+	});
 });
 
 describe('getFeed (0.7.0 serve-stale-while-revalidate + warming)', () => {
