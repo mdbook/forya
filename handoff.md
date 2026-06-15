@@ -195,6 +195,40 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.8.4 — share links (scheme B capability tokens + OG link-card + storage gate)
+
+A per-clip, off-LAN share link. Load-bearing context the code alone won't tell you:
+
+- **Scheme B (stored capability tokens), NOT stateless HMAC.** A token is 32 random
+  bytes (base64url) stored in `share.json` (mirror of `starred.json`/`hidden.json`:
+  atomic write, serialized queue, in-mem cache, DATA_DIR-gated, never throws). Mint
+  dedups per `(owner, name)` → a clip's link is durable; revoke = delete the row; no
+  signing secret to rotate. Chosen over HMAC because the operator wanted durable links
+  AND clean per-link revoke (the rotation trilemma — stateless, rotate-safe, and
+  revocable: pick two; only stored tokens give revoke plus durable links).
+- **`/share/*` is the ONLY unauthenticated surface, via Authentik not Caddy.** The
+  `forya-liked` provider has `skip_path_regex = ^/share/` (operator-set in the UI; the
+  MCP PATCH is classifier-blocked as SSO-weakening). The mint (`/api/share/<name>`)
+  stays gated — bypassing it would let anyone mint. Validate after any auth change:
+  `/share/<bogus>`→404 (reaches upstream), `/` + `/api/feed`→302→auth (gate intact).
+- **The OG link-card is REQUIRED, not polish.** Without Open Graph meta on the player
+  page, iOS's share sheet treats the page's `<video>` as the payload and shares the raw
+  `.mp4` FILE, not the link. The fix is `og:type=video.other` + a STATIC `og:title` +
+  `og:url`/`og:image`/`og:video` + `twitter:card`, plus dropping the `.mp4` filename
+  from `navigator.share({title})`. Verified on-device: link card + a rich Discord embed.
+- **`og:image` needs its own unauth route — and it MUST be cache-read-only.** The
+  gated `/api/poster` route is unreachable to the (unauthenticated) iOS link crawler,
+  so `og:image` points at `/share/<token>/poster`. That route reads the poster cache ONLY
+  and NEVER calls `enqueueGeneration` — an unauth surface must not be able to spawn
+  ffmpeg (transcode-DoS). A cache miss → 404 (graceful: the card just lacks an image).
+  Note: a transcode run that bumps source mtimes invalidates poster-cache keys, so most
+  cards are imageless (still link cards) until the feed re-warms each poster.
+- **`shareBase` is STORE-GATED.** `config.shareBase` is forced empty without a
+  `DATA_DIR`, so a `PUBLIC_SHARE_BASE` set on a store-less instance can't make the
+  client advertise minting against a disabled mint route — no store ⇒ direct-URL
+  fallback, never a half-enabled mint. `PUBLIC_SHARE_BASE` is per-instance (liked =
+  `https://liked-tt.mdbook.me`); only a feed with both a `DATA_DIR` and a base mints.
+
 ## 0.8.3 — server-side hide (hidden.json, mirror of starred) + media symlink guard
 
 - **`src/lib/server/hidden.ts` is a faithful mirror of `starred.ts`** (single

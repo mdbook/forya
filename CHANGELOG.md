@@ -4,6 +4,40 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.8.4 — share links (off-network, scheme B capability tokens)
+
+Adds a per-clip share link that resolves OFF the LAN: tap share on a clip and send
+someone a URL that plays just that clip, without exposing the feed or asking the
+recipient to authenticate. Built as stored capability tokens (scheme B) — no signing
+secret, and per-link revoke is a row delete. The playback/cure machine and the
+byte-serve (Range) path are unchanged; the whole feature is gated on a writable volume
+and is inert (byte-identical to 0.8.3) without one.
+
+- **Share a single clip via an unguessable link.** `GET /api/share/<name>` (authed,
+  like the rest of `/api`) mints — or reuses, deduped per clip — a 256-bit CSPRNG
+  capability token stored in `share.json` under `DATA_DIR` (atomic tmp+rename,
+  serialized write-queue, in-memory cache — the `starred.json`/`hidden.json`
+  discipline). The token maps to exactly one clip; revoke = delete the row.
+- **`/share/<token>` is a standalone, unauthenticated player.** The hub bypasses
+  forward-auth for `/share/*` only (the mint stays gated). The page is a plain
+  `<video controls playsinline>` with no feed/pool/gesture code — entirely outside the
+  sound-on cure machine. Bytes stream from `/share/<token>/media` over the same
+  Range-correct path as `/api/media` (the shared `serve()` with its `lstat`
+  symlink-reject — load-bearing on this unauth surface). Any miss
+  (unknown/revoked/disabled token) is a uniform 404 with no existence oracle.
+- **Rich link-card previews (iOS, Discord, …).** The player page carries Open Graph +
+  Twitter meta (`og:title`/`og:url`/`og:image`/`og:video`) so a shared link renders a
+  playable card instead of offering the raw `.mp4` file. `og:image` is served by a
+  dedicated unauthenticated `/share/<token>/poster` route that is cache-read-only — it
+  never spawns ffmpeg, so the public surface can't be used to trigger work.
+- **Off-network base + graceful fallback.** `PUBLIC_SHARE_BASE` makes the minted URL
+  resolvable off the LAN. The feature hard-gates on a writable volume: with no
+  `DATA_DIR` the share routes 404, the client advertises nothing, and `share()` falls
+  back to the direct (LAN) URL — never a half-enabled mint.
+- **Ownership scaffold for a possible per-user future.** Tokens carry an `owner` field
+  (a `__shared__` sentinel today) threaded through a `currentOwner()` seam, so a later
+  per-user (OIDC) switch is a single localized change; no per-user logic ships now.
+
 ## 0.8.3 — server-side hide (cross-device) + media symlink hardening
 
 Promotes "hide from feed" from a browser-local mark to a server-persisted,
