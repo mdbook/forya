@@ -522,7 +522,10 @@
 		}
 		if (navigator.share) {
 			try {
-				await navigator.share({ title: item.name, url });
+				// title is a clean app name (NOT item.name) — a raw `<id>.mp4` filename made iOS
+				// treat the payload as a FILE and offer the video itself instead of the link. The
+				// `/share/<token>` page's Open Graph tags (0.8.4) carry the rich link-card preview.
+				await navigator.share({ title: 'forya', url });
 				return;
 			} catch (e) {
 				// AbortError = the user dismissed the sheet → done. Anything else

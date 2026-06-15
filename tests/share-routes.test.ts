@@ -38,4 +38,11 @@ describe('share routes — feature OFF (no DATA_DIR) → uniform 404, store unto
 			status: 404
 		});
 	});
+
+	it('poster GET /share/<token>/poster → 404 (unauth og:image; resolve null → uniform 404)', async () => {
+		const { GET } = await import('../src/routes/share/[token]/poster/+server');
+		await expect((GET as RequestHandler)(ev({ token: 'any-token' }))).rejects.toMatchObject({
+			status: 404
+		});
+	});
 });
