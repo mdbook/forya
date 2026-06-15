@@ -500,15 +500,52 @@
 		modeTimer = setTimeout(() => (modeToast = null), 2000);
 	}
 
-	/** Share the active video via the iOS share sheet, or fall back to a direct download. */
-	function share(item: FeedItem | undefined) {
+	/** Share the active video. With a public share base (0.8.4), mint a stored capability link
+	 *  (`/share/<token>` — resolves OFF the LAN, unlike the direct media URL) and offer it via
+	 *  the native share sheet, falling back to a clipboard copy; without one, share the direct
+	 *  (LAN) URL as before. Cure-irrelevant — touches no pool/play state. iOS caveat: the async
+	 *  mint can consume the share sheet's transient activation, so we distinguish a user-cancel
+	 *  (AbortError → done) from an activation lapse (→ clipboard) and degrade gracefully. */
+	async function share(item: FeedItem | undefined) {
 		if (!item) return;
-		const url = new URL(item.url, location.origin).href;
-		if (navigator.share) {
-			navigator.share({ title: item.name, url }).catch(() => {});
-			return;
+		let url = new URL(item.url, location.origin).href; // pre-0.8.4 fallback: direct LAN URL
+		if (settings.shareBase) {
+			try {
+				const res = await fetch(`/api/share/${encodeURIComponent(item.name)}`);
+				if (res.ok) {
+					const d = (await res.json()) as { url?: string };
+					if (d?.url) url = d.url;
+				}
+			} catch {
+				/* mint failed (offline / feature disabled) → keep the direct-URL fallback */
+			}
 		}
-		const a = document.createElement('a');
+		if (navigator.share) {
+			try {
+				// title is a clean app name (NOT item.name) — a raw `<id>.mp4` filename made iOS
+				// treat the payload as a FILE and offer the video itself instead of the link. The
+				// `/share/<token>` page's Open Graph tags (0.8.4) carry the rich link-card preview.
+				await navigator.share({ title: 'forya', url });
+				return;
+			} catch (e) {
+				// AbortError = the user dismissed the sheet → done. Anything else
+				// (NotAllowedError = activation lapsed after the async mint, common on iOS) →
+				// fall through to the clipboard copy.
+				if ((e as Error)?.name === 'AbortError') return;
+			}
+		}
+		if (navigator.clipboard) {
+			try {
+				await navigator.clipboard.writeText(url);
+				copyToast = true;
+				clearTimeout(copyTimer);
+				copyTimer = setTimeout(() => (copyToast = false), 1500);
+				return;
+			} catch {
+				/* clipboard blocked */
+			}
+		}
+		const a = document.createElement('a'); // last resort: direct download
 		a.href = url;
 		a.download = item.name;
 		a.click();

@@ -50,6 +50,7 @@ export const load: PageServerLoad = async () => {
 			posters: config.posters,
 			starred: config.starred,
 			hidden: config.hidden,
+			shareBase: config.shareBase,
 			debugPlayback: config.debugPlayback,
 			buildSha: config.buildSha
 		}

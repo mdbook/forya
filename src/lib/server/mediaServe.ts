@@ -1,0 +1,96 @@
+// Range-correct media serving — the byte path, shared (0.8.4) by `/api/media/[name]` (authed)
+// AND `/share/<token>/media` (unauth, after a token→name resolve). Extracted VERBATIM from the
+// 0.8.3 media route so both surfaces get the identical contract: 206 + Content-Range +
+// Accept-Ranges, HEAD-mirrors-GET, a Range NEVER collapsed into a 200, AND the load-bearing
+// lstat symlink-reject (adversarial #1) — CRITICAL because `/share/*` is unauthenticated, so
+// the symlink guard MUST apply there too or the escape becomes internet-facing.
+//
+// The byte MATH still lives in `videos.ts` (`resolveRange`, unit-tested) — serving-four stays
+// byte-identical; this module only relocates the route-level `statFile`/`serve` wrappers.
+import { error } from '@sveltejs/kit';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import { config } from './config';
+import { mimeFromExt, resolveRange, safeMediaPath, weakETag } from './videos';
+
+export async function statFile(name: string, videoDir: string = config.videoDir) {
+	const full = safeMediaPath(name, videoDir);
+	if (full === null) error(404, 'not found'); // traversal / bad name → no leak
+	let st: fs.Stats;
+	try {
+		// lstat, NOT stat (adversarial #1): `stat` FOLLOWS a symlink, so a planted
+		// `clip.mp4 -> /etc/passwd` (an in-dir NAME whose TARGET escapes VIDEO_DIR) would
+		// pass the purely-lexical `safeMediaPath` and the byte path would stream the
+		// out-of-dir file with full Range support. `lstat` stats the LINK itself, so the
+		// symlink check below rejects it. Mirrors the poster route's F7 guard; the feed
+		// scan already excludes symlinks (videos.ts), so no legitimate item is one.
+		st = await fsp.lstat(full);
+	} catch {
+		error(404, 'not found');
+	}
+	// Regular file only — reject symlinks (and dirs/sockets/etc.) so the byte path can
+	// never follow a link out of the `:ro` VIDEO_DIR. For a regular file `lstat` === `stat`,
+	// so the size/mtime that feed resolveRange/weakETag/baseHeaders below are unchanged
+	// (serving-four stays byte-identical; this is a route-level guard, not a math change).
+	if (st.isSymbolicLink() || !st.isFile()) error(404, 'not found');
+	return { full, st };
+}
+
+function baseHeaders(name: string, st: fs.Stats): Record<string, string> {
+	return {
+		'accept-ranges': 'bytes',
+		'content-type': mimeFromExt(name),
+		'last-modified': st.mtime.toUTCString(),
+		etag: weakETag(st.size, st.mtimeMs),
+		// Purely additive: lets the browser reuse already-fetched bytes when
+		// scrolling back up (the windowed feed re-enters previous cards) without a
+		// revalidation round-trip. `private` because instances sit behind per-user
+		// forward-auth — never a shared proxy cache. The weak ETag/Last-Modified
+		// still drive revalidation once stale. Does NOT influence the Range branch
+		// logic below — the 206/Content-Range/Content-Length/416 contract is
+		// computed solely from resolveRange().
+		'cache-control': 'private, max-age=3600'
+	};
+}
+
+/**
+ * Serve `name` from `videoDir` with full Range support (the iOS-correct contract). Used by
+ * both the authed `/api/media` route and the unauth `/share/<token>/media` route — the CALLER
+ * resolves the name (route param, or token→name) and is responsible for any auth/owner logic;
+ * this function does the safe-resolve + lstat-guard + Range stream identically for both.
+ */
+export async function serve(
+	name: string,
+	rangeHeader: string | null,
+	method: 'GET' | 'HEAD',
+	videoDir: string = config.videoDir
+) {
+	const { full, st } = await statFile(name, videoDir);
+	const headers = baseHeaders(name, st);
+	const isHead = method === 'HEAD';
+	const range = resolveRange(rangeHeader, st.size);
+
+	if (range.kind === 'unsatisfiable') {
+		return new Response(null, {
+			status: 416,
+			headers: { ...headers, 'content-range': `bytes */${st.size}` }
+		});
+	}
+
+	if (range.kind === 'partial') {
+		headers['content-range'] = `bytes ${range.start}-${range.end}/${st.size}`;
+		headers['content-length'] = String(range.length);
+		const body = isHead
+			? null
+			: (Readable.toWeb(
+					fs.createReadStream(full, { start: range.start, end: range.end })
+				) as ReadableStream);
+		return new Response(body, { status: 206, headers });
+	}
+
+	// full 200 — whole file streamed (never buffered into memory), or no body for HEAD
+	headers['content-length'] = String(st.size);
+	const body = isHead ? null : (Readable.toWeb(fs.createReadStream(full)) as ReadableStream);
+	return new Response(body, { status: 200, headers });
+}

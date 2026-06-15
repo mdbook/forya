@@ -64,6 +64,11 @@ export interface FeedSettings {
 	 *  when false the hide stays local-only (localStorage). Distinct from `allowHide`,
 	 *  which is whether the hide BUTTON is shown at all. */
 	hidden: boolean;
+	/** Public base URL for share links (PUBLIC_SHARE_BASE, 0.8.4). When set, `share()`
+	 *  mints a `/share/<token>` capability link off this base (resolves off-network);
+	 *  empty → `share()` shares the direct LAN media URL (pre-0.8.4). A hostname, not a
+	 *  secret. */
+	shareBase: string;
 	/** Diagnostic playback overlay (DEBUG_PLAYBACK, 0.5.4). Default false → the
 	 *  overlay never renders and VideoCard emits no debug events. */
 	debugPlayback: boolean;
