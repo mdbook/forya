@@ -56,7 +56,7 @@ function page(token: string, base: string): string {
 </style>
 </head>
 <body>
-<video controls playsinline preload="metadata" src="${media}"></video>
+<video controls playsinline preload="metadata" src="${enc(media)}"></video>
 </body>
 </html>`;
 }
@@ -68,10 +68,10 @@ export const GET: RequestHandler = async (event) => {
 	// (never trust the stored payload as a path) before we reference it.
 	if (!resolved || safeMediaPath(resolved.name, config.videoDir) === null) error(404, 'not found');
 
-	// Absolute base for the og:* URLs — identical construction to the mint route so og:url
-	// equals the minted share URL. PUBLIC_SHARE_BASE is the canonical public origin; fall back
-	// to the request origin when it is unset (dev / no public base).
-	const base = config.shareBase || event.url.origin;
+	// Absolute base for the og:* URLs — identical construction to the mint route (incl. the
+	// trailing-slash strip) so og:url EQUALS the minted share URL. PUBLIC_SHARE_BASE is the
+	// canonical public origin; fall back to the request origin when it is unset (dev / no base).
+	const base = (config.shareBase || event.url.origin).replace(/\/+$/, '');
 
 	return new Response(page(params.token, base), {
 		headers: {

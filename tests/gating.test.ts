@@ -55,6 +55,41 @@ describe('config gate derivation — DATA_DIR is the volume, POSTERS is the opt-
 	});
 });
 
+describe('config shareBase store-gating (0.8.4) — advertise minting only with an operational store', () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+		vi.resetModules();
+	});
+
+	async function loadShare(dataDir: string, shareBase: string) {
+		vi.resetModules();
+		vi.stubEnv('DATA_DIR', dataDir);
+		vi.stubEnv('PUBLIC_SHARE_BASE', shareBase);
+		return (await import('../src/lib/server/config')).config;
+	}
+
+	// Operator requirement (0.8.4): no persistent storage ⇒ `share()` falls back to the direct
+	// (LAN) URL, NEVER a half-enabled mint. A `PUBLIC_SHARE_BASE` set without a `DATA_DIR` must
+	// NOT make the client advertise minting against a disabled mint route.
+	it('PUBLIC_SHARE_BASE set but NO DATA_DIR → share OFF + shareBase EMPTY (client stays on the direct URL)', async () => {
+		const config = await loadShare('', 'https://share.example');
+		expect(config.share).toBe(false);
+		expect(config.shareBase).toBe('');
+	});
+
+	it('DATA_DIR + PUBLIC_SHARE_BASE → share ON + shareBase carries through (mint enabled)', async () => {
+		const config = await loadShare('/data', 'https://share.example');
+		expect(config.share).toBe(true);
+		expect(config.shareBase).toBe('https://share.example');
+	});
+
+	it('DATA_DIR but NO PUBLIC_SHARE_BASE → share ON, shareBase empty (mint would use the request origin; client stays on the direct URL)', async () => {
+		const config = await loadShare('/data', '');
+		expect(config.share).toBe(true);
+		expect(config.shareBase).toBe('');
+	});
+});
+
 describe('POSTERS off + DATA_DIR present → 0.7.0 behaviour retained', () => {
 	let dir: string;
 	beforeEach(async () => {

@@ -77,9 +77,12 @@ export const config = {
 	share: dataDir !== '',
 	/** Public base URL for share links (0.8.4), e.g. `https://share.mdbook.me`. Surfaced
 	 *  to the client (`settings.shareBase`) so `share()` builds an off-network-resolvable
-	 *  URL instead of the LAN request origin. Empty → `share()` falls back to
-	 *  `location.origin` (pre-0.8.4). Safe to expose (a hostname, not a secret). */
-	shareBase: env.PUBLIC_SHARE_BASE ?? '',
+	 *  URL instead of the LAN request origin. ★ STORE-GATED: forced empty without a
+	 *  `DATA_DIR` (no `share` store), so a `PUBLIC_SHARE_BASE` set on a store-less instance
+	 *  can't make the client advertise minting against a disabled mint route — no store ⇒
+	 *  `share()` falls back to the direct `location.origin` URL (pre-0.8.4 "option B"),
+	 *  never a half-enabled mint. Empty → same fallback. Safe to expose (a hostname). */
+	shareBase: dataDir !== '' ? (env.PUBLIC_SHARE_BASE ?? '') : '',
 	/** Diagnostic playback overlay (0.5.4 instrumentation). Default OFF → entirely
 	 *  inert in prod (the overlay is gated client-side on this flag and emits no
 	 *  events when off). Set `DEBUG_PLAYBACK=1` on an instance to surface a live
