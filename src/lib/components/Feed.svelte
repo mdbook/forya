@@ -355,6 +355,23 @@
 			// revealed (above), and it's reset to t=0 on activation (driveActive), so the off-
 			// screen pre-roll is never seen and there's no skip-ahead.
 			pool[slot].muted = true;
+			// 0.8.6 BT auto-recover (device-verify #1063 reframe; discriminator bare-CLEAN #1068):
+			// a recycled neighbour reaching 'playing' makes iOS RE-ARBITRATE the Bluetooth (A2DP)
+			// route and ORPHAN the ACTIVE element's audio — video keeps playing, audio drops, and
+			// active.muted STAYS false (so a plain re-set is a no-op; this is route loss, not a mute).
+			// The operator's manual fix is mute→unmute; automate it as a real muted TRANSITION on the
+			// ACTIVE element only: force muted=true now, then restore on the next frame via
+			// assertActiveAudio (the SAME D-safe off-gesture unmute onActivePlaying already uses on a
+			// blessed+playing element — no new ungestured unmute path, no play()/pause()). Gated
+			// `blessed && !muted` so it only runs when sound is on and never touches a neighbour. The
+			// brief active-mute blip is the UX cost (operator-tuned: rAF gap vs a short timeout).
+			if (blessed && !muted) {
+				const a = activeVideo();
+				if (a && !a.muted) {
+					a.muted = true;
+					requestAnimationFrame(assertActiveAudio);
+				}
+			}
 		}
 	}
 	function onPoolError(slot: number) {
