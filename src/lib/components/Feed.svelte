@@ -1089,6 +1089,16 @@
 		for (let s = 0; s < POOL_SIZE; s++) {
 			const v = document.createElement('video');
 			v.muted = true;
+			// 0.8.6 BT audio-cut fix (root cause): also set the muted CONTENT ATTRIBUTE, not just
+			// the property. On a src-swap iOS resets `.muted` to the attribute default — and with
+			// the attribute unset that default is UNMUTED, so a recycled neighbour bleeds ~1-2s of
+			// audio until the `'playing'` re-mute (onPoolPlaying). Over Bluetooth that blip
+			// re-arbitrates the A2DP route and cuts the ACTIVE clip's audio (operator's "~1-in-4,
+			// only on BT"). Setting the attribute makes the reset land on MUTED at the root. The
+			// active element still goes audible: the bless flips the muted PROPERTY (blessPool/
+			// toggleMute/onTouchEnd), which overrides the attribute for the live element — only the
+			// default changes. (Same property+attribute pairing as playsinline just below.)
+			v.setAttribute('muted', '');
 			v.playsInline = true;
 			v.setAttribute('playsinline', '');
 			v.loop = !autoAdvance;
@@ -1103,6 +1113,13 @@
 			});
 			v.addEventListener('loadedmetadata', () => {
 				if (s === activeSlot()) activeDuration = v.duration || 0;
+				// 0.8.6 BT audio-cut fix (belt-and-suspenders): re-assert the neighbour mute here.
+				// loadedmetadata fires BEFORE 'playing', so if iOS reset `.muted` to the attribute
+				// default while loading the swapped src, close the bleed window before the recycled
+				// neighbour can emit a sample (the BT A2DP re-arbitration trigger). Neighbour-ONLY —
+				// never the active slot — so the bless/unmute path is untouched. The root fix is the
+				// muted content-attribute at creation; this just guards a stale-iOS attribute gap.
+				if (s !== activeSlot()) v.muted = true;
 				// 0.8.2 cropping fix: now that the element knows its REAL intrinsic dims, re-fit
 				// this slot — at src-swap (syncPool) videoWidth is still 0, so applyFit fell back
 				// to manifest dims (absent on cheap-scan feeds → cover-crop). Fit CLASS only; zero
