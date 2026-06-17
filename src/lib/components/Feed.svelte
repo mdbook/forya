@@ -454,7 +454,10 @@
 			// never a pause→play→unmute. Muted autoplay is gesture-free + audio-free, so the cure
 			// holds. This is the TikTok recycler. (A neighbour MUST be playing at bless time or its
 			// per-element grant never mints → its later becoming-active unmute would pause it.)
-			if (v.src && v.paused) v.play().catch(() => {});
+			// 0.8.6 BT cut fix: HOLD neighbour play() while a touch-scroll is in flight — an
+			// off-gesture neighbour can never re-arbitrate the route; onScrollSettle flushes these
+			// the instant the scroll settles. The active path below is unaffected (claims as before).
+			if (v.src && v.paused && !scrolling) v.play().catch(() => {});
 		}
 		if (aSlot < 0) return;
 		const v = pool[aSlot];
@@ -652,13 +655,28 @@
 	// iOS re-grants. Fires only on a moved touch (not a stationary tap — tapActive owns those).
 	let touchStartY = 0;
 	let touchMoved = false;
+	// 0.8.6 BT A2DP audio-cut fix (bus #1116/#1126; operator A/B: manual scroll cuts, autoscroll
+	// never does). A NEIGHBOUR element entering 'playing' re-arbitrates the Bluetooth route and
+	// orphans the ACTIVE element's audio ONLY while a user gesture has opened iOS's route-
+	// arbitration window. So DEFER neighbour play() until the scroll SETTLES (off-gesture, where
+	// a neighbour play() cannot re-arb): `scrolling` is true from a real touch-drag until
+	// scrollend; driveActive's neighbour loop is gated on it; onScrollSettle flushes the deferred
+	// plays. The ACTIVE path is UNTOUCHED — it still claims the route exactly as before (the
+	// working sound-carry; a landed-but-deferred element still activates via tryPlayActive's
+	// muted-first D-safe flip, INV-4). Programmatic autoscroll fires no touchmove ⇒ `scrolling`
+	// stays false there (it was already cut-free), so this changes ONLY the finger-driven path.
+	let scrolling = false;
+	let settleTimer: ReturnType<typeof setTimeout> | undefined;
 
 	function onTouchStart(e: TouchEvent) {
 		touchStartY = e.touches[0]?.clientY ?? 0;
 		touchMoved = false;
 	}
 	function onTouchMove(e: TouchEvent) {
-		if (Math.abs((e.touches[0]?.clientY ?? touchStartY) - touchStartY) > 10) touchMoved = true;
+		if (Math.abs((e.touches[0]?.clientY ?? touchStartY) - touchStartY) > 10) {
+			touchMoved = true;
+			scrolling = true; // a real touch-scroll — hold neighbour play() until settle (BT fix)
+		}
 	}
 	function onTouchEnd() {
 		if (!touchMoved) return;
@@ -675,6 +693,19 @@
 				?.play()
 				.catch(() => {});
 		}
+		// Fallback if `scrollend` never fires (a tiny drag, or a browser lacking it): force the
+		// settle shortly after the finger lifts so the deferred neighbour play() is not stranded.
+		clearTimeout(settleTimer);
+		settleTimer = setTimeout(onScrollSettle, 400);
+	}
+	// Scroll fully stopped (drag + momentum done) ⇒ off-gesture. Clear the hold and FLUSH the
+	// deferred neighbour play() via driveActive (idempotent — it replays only paused neighbours).
+	// Off-gesture, a neighbour reaching 'playing' cannot re-arbitrate the A2DP route (the cut).
+	function onScrollSettle() {
+		clearTimeout(settleTimer);
+		if (!scrolling) return;
+		scrolling = false;
+		driveActive();
 	}
 
 	// ── #3b foreground re-drive (0.6.2) ─────────────────────────────────────────────
@@ -1153,6 +1184,8 @@
 		feedEl?.addEventListener('touchstart', onTouchStart, { passive: true });
 		feedEl?.addEventListener('touchmove', onTouchMove, { passive: true });
 		feedEl?.addEventListener('touchend', onTouchEnd, { passive: true });
+		// 0.8.6 BT cut fix: flush deferred neighbour play() once the scroll fully settles (off-gesture).
+		feedEl?.addEventListener('scrollend', onScrollSettle);
 
 		// #3b — re-drive the pool when the tab/app returns to the foreground. iOS pauses inline
 		// <video> on background; visibilitychange covers tab-switch/lock, pageshow covers iOS
@@ -1170,9 +1203,11 @@
 			feedEl?.removeEventListener('touchstart', onTouchStart);
 			feedEl?.removeEventListener('touchmove', onTouchMove);
 			feedEl?.removeEventListener('touchend', onTouchEnd);
+			feedEl?.removeEventListener('scrollend', onScrollSettle);
 			document.removeEventListener('visibilitychange', onForeground);
 			window.removeEventListener('pageshow', onForeground);
 			clearTimeout(undoTimer);
+			clearTimeout(settleTimer);
 			clearTimeout(modeTimer);
 			clearTimeout(copyTimer);
 			clearTimeout(burstTimer);
