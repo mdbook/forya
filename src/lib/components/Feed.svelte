@@ -659,14 +659,20 @@
 	// never does). A NEIGHBOUR element entering 'playing' re-arbitrates the Bluetooth route and
 	// orphans the ACTIVE element's audio ONLY while a user gesture has opened iOS's route-
 	// arbitration window. So DEFER neighbour play() until the scroll SETTLES (off-gesture, where
-	// a neighbour play() cannot re-arb): `scrolling` is true from a real touch-drag until
-	// scrollend; driveActive's neighbour loop is gated on it; onScrollSettle flushes the deferred
+	// a neighbour play() cannot re-arb): `scrolling` is true from a real touch-drag until the
+	// scroll SETTLES; driveActive's neighbour loop is gated on it; onScrollSettle flushes the deferred
 	// plays. The ACTIVE path is UNTOUCHED — it still claims the route exactly as before (the
 	// working sound-carry; a landed-but-deferred element still activates via tryPlayActive's
 	// muted-first D-safe flip, INV-4). Programmatic autoscroll fires no touchmove ⇒ `scrolling`
 	// stays false there (it was already cut-free), so this changes ONLY the finger-driven path.
 	let scrolling = false;
 	let settleTimer: ReturnType<typeof setTimeout> | undefined;
+	// Flush the deferred neighbour play() only after the feed has been scroll-QUIET for this long —
+	// a debounce re-armed on every 'scroll' tick, so it OUTLASTS iOS momentum by construction. A
+	// fixed touchend timer could fire MID-momentum, flushing the neighbour play() back into the
+	// still-open route window and re-introducing the cut (review #1131/#1135). `scrollend` (iOS17+)
+	// is a redundant fast-path on top of this.
+	const SETTLE_QUIET_MS = 150;
 
 	function onTouchStart(e: TouchEvent) {
 		touchStartY = e.touches[0]?.clientY ?? 0;
@@ -693,10 +699,20 @@
 				?.play()
 				.catch(() => {});
 		}
-		// Fallback if `scrollend` never fires (a tiny drag, or a browser lacking it): force the
-		// settle shortly after the finger lifts so the deferred neighbour play() is not stranded.
+		// Arm the scroll-quiet settle debounce. onScroll re-arms it through any momentum, so the
+		// deferred neighbour play() flushes only AFTER scroll truly stops (never mid-momentum).
+		scheduleSettle();
+	}
+	// (Re)arm the settle debounce — fires onScrollSettle after SETTLE_QUIET_MS of scroll silence.
+	function scheduleSettle() {
 		clearTimeout(settleTimer);
-		settleTimer = setTimeout(onScrollSettle, 400);
+		settleTimer = setTimeout(onScrollSettle, SETTLE_QUIET_MS);
+	}
+	// Re-arm on every scroll tick WHILE a touch-scroll is in flight (incl. post-touchend momentum),
+	// so the flush lands only at true scroll-settle. No-op for programmatic autoscroll
+	// (scrolling=false ⇒ onScrollSettle early-returns) — changes only the finger-driven path.
+	function onScroll() {
+		if (scrolling) scheduleSettle();
 	}
 	// Scroll fully stopped (drag + momentum done) ⇒ off-gesture. Clear the hold and FLUSH the
 	// deferred neighbour play() via driveActive (idempotent — it replays only paused neighbours).
@@ -1184,7 +1200,9 @@
 		feedEl?.addEventListener('touchstart', onTouchStart, { passive: true });
 		feedEl?.addEventListener('touchmove', onTouchMove, { passive: true });
 		feedEl?.addEventListener('touchend', onTouchEnd, { passive: true });
-		// 0.8.6 BT cut fix: flush deferred neighbour play() once the scroll fully settles (off-gesture).
+		// 0.8.6 BT cut fix: defer neighbour play() until scroll truly settles (off-gesture). 'scroll'
+		// re-arms a quiet-debounce through momentum; 'scrollend' (iOS17+) is a redundant fast-path.
+		feedEl?.addEventListener('scroll', onScroll, { passive: true });
 		feedEl?.addEventListener('scrollend', onScrollSettle);
 
 		// #3b — re-drive the pool when the tab/app returns to the foreground. iOS pauses inline
@@ -1203,6 +1221,7 @@
 			feedEl?.removeEventListener('touchstart', onTouchStart);
 			feedEl?.removeEventListener('touchmove', onTouchMove);
 			feedEl?.removeEventListener('touchend', onTouchEnd);
+			feedEl?.removeEventListener('scroll', onScroll);
 			feedEl?.removeEventListener('scrollend', onScrollSettle);
 			document.removeEventListener('visibilitychange', onForeground);
 			window.removeEventListener('pageshow', onForeground);
