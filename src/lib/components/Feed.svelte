@@ -748,12 +748,18 @@
 	}
 
 	// ── Starred / favorite mark (0.8.0) ──────────────────────────────────────────────
-	// Client-side reactive set (mirrors `hidden`): the single source of truth for the
-	// rail heart's filled state + the gesture feedback. Seeded from GET /api/starred on
-	// mount (when the feature is on) and updated OPTIMISTICALLY on toggle, with a
-	// PUT/DELETE to persist (rolled back on failure). Fully decoupled from the feed
-	// manifest — a mark never rescans or touches the pooled-<video> machine.
+	// Client-side reactive set (mirrors `hidden`): the single source of truth for the rail
+	// heart + the on-card heart badge + the gesture feedback. SSR-SEEDED from the `starred`
+	// prop AT COMPONENT INIT (0.9.0) — this runs during SSR too, so the server emits filled
+	// hearts and a hard reload onto a favorited clip never flashes empty (AC-2c). Updated
+	// OPTIMISTICALLY on toggle with a PUT/DELETE to persist (rolled back on failure). Fully
+	// decoupled from the feed manifest — a mark never rescans or touches the pooled-<video> machine.
 	const starredSet = new SvelteSet<string>();
+	// untrack: seed ONCE from the INITIAL prop values (runs in SSR + at init), intentionally NOT
+	// a reactive dependency — the user's later toggles own the set, a re-seed would re-add removals.
+	untrack(() => {
+		if (settings.starred) for (const n of starred) starredSet.add(n);
+	});
 	// M6 gesture state machine (operator-locked, review-gated C1–C5). ONE window (review
 	// #733 — collapsed from two near-equal constants): a tap within SEQ_WINDOW_MS of the
 	// prior on the SAME active card continues the sequence; that much silence ends it.
@@ -1088,12 +1094,8 @@
 		autoAdvance = loadAutoAdvance(feedName, settings.autoAdvance);
 		for (const n of loadHidden(feedName)) hidden.add(n);
 
-		// Seed the starred set SYNCHRONOUSLY from the SSR payload (0.9.0) so the first paint
-		// already shows filled hearts — no empty→filled flash on a hard reload onto a favorited
-		// clip. SSR-seeded in +page.server (`config.starred ? readStarred() : []`), a cached
-		// in-mem read = latency-neutral. Replaces the old async GET /api/starred fetch that raced
-		// first paint. Decoupled from the feed manifest; gated on the feature.
-		if (settings.starred) for (const n of starred) starredSet.add(n);
+		// (starredSet is SSR-seeded from the `starred` prop at component INIT — see its
+		// declaration — so filled hearts paint on the first frame, SSR included; no onMount seed.)
 
 		// Discoverability for the hidden long-press-to-open-favorites gesture (0.9.0): a one-time
 		// hint toast, shown once per feed (localStorage), only on the main feed (not the favorites
