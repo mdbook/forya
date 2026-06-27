@@ -171,6 +171,18 @@
 	let activeShowPlay = $state(false);
 	let activeCurrentTime = $state(0);
 	let activeDuration = $state(0);
+	// 0.9.0: the ACTIVE video's intrinsic dims, for sizing the /liked red glow to the actual
+	// rendered video rect — so it hugs a letterboxed/pillarboxed clip, not the whole screen (#1344).
+	let activeVideoW = $state(0);
+	let activeVideoH = $state(0);
+	// /liked glow geometry from the active clip's real dims + viewport: contain (letterboxed) →
+	// the glow hugs the centered video rect (aspect-ratio box); cover/unknown → it fills the screen.
+	const glowContain = $derived(
+		activeVideoW > 0 &&
+			activeVideoH > 0 &&
+			pickFit(activeVideoW, activeVideoH, viewportAR) === 'contain'
+	);
+	const glowAR = $derived(activeVideoW > 0 && activeVideoH > 0 ? activeVideoW / activeVideoH : 0);
 	// Monotonic token cancelling stale async play retries on the active element.
 	let playGen = 0;
 	// 0.8.7 (#1307): rAF token coalescing overlay paused-state syncs (see scheduleShowPlaySync).
@@ -504,6 +516,8 @@
 			lastDrivenName = aName ?? null;
 		}
 		activeDuration = v.duration || 0;
+		activeVideoW = v.videoWidth || 0; // 0.9.0: feed the /liked glow the active clip's real dims
+		activeVideoH = v.videoHeight || 0;
 		activeCurrentTime = v.currentTime || 0;
 		activeBuffering = false;
 		// MUTED-autoplay the active card (0.6.1, reverts start-paused #472). tryPlayActive forces
@@ -1174,7 +1188,11 @@
 				if (s === activeSlot()) activeCurrentTime = v.currentTime;
 			});
 			v.addEventListener('loadedmetadata', () => {
-				if (s === activeSlot()) activeDuration = v.duration || 0;
+				if (s === activeSlot()) {
+					activeDuration = v.duration || 0;
+					activeVideoW = v.videoWidth || 0; // 0.9.0: /liked glow follows the real video rect
+					activeVideoH = v.videoHeight || 0;
+				}
 				// 0.8.2 cropping fix: now that the element knows its REAL intrinsic dims, re-fit
 				// this slot — at src-swap (syncPool) videoWidth is still 0, so applyFit fell back
 				// to manifest dims (absent on cheap-scan feeds → cover-crop). Fit CLASS only; zero
@@ -1393,10 +1411,16 @@
 		onhide={() => hide(activeItem?.name)}
 	/>
 	{#if likedView}
-		<!-- Favorites view (0.9.0): a barely-there red edge glow signalling "you're in favorites"
-		     (the on-card heart was removed; the rail heart is the per-clip indicator). Fixed,
-		     pointer-events:none inset vignette in the favorite red — tune opacity on-device. -->
-		<div class="fav-glow" aria-hidden="true"></div>
+		<!-- Favorites view (0.9.0): a barely-there red glow signalling "you're in favorites" (the
+		     on-card heart was removed; the rail heart is the per-clip indicator). Sized to the
+		     ACTIVE clip's rendered video rect so it hugs a letterboxed/pillarboxed clip, not the
+		     screen (#1344); pointer-events:none, opacity tunable on-device. -->
+		<div
+			class="fav-glow"
+			class:contain={glowContain}
+			style:--clip-ar={glowAR || ''}
+			aria-hidden="true"
+		></div>
 		<!-- Back chevron to the main feed. A real <a> so it's keyboard-accessible + SvelteKit
 		     client-navigates. -->
 		<a class="back-chip" href={resolve('/')} aria-label="Back to feed">
@@ -1691,6 +1715,19 @@
 		z-index: 5;
 		pointer-events: none;
 		box-shadow: inset 0 0 90px 4px rgba(255, 45, 85, 0.16);
+	}
+	/* Letterboxed/pillarboxed (contain) clips: size the glow to the CENTERED video rect (the
+	   largest box of the clip's aspect ratio that fits the viewport) so it hugs the video, not the
+	   whole screen. --clip-ar = the active clip's intrinsic w/h. */
+	.fav-glow.contain {
+		inset: auto;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		width: min(100vw, calc(100dvh * var(--clip-ar)));
+		aspect-ratio: var(--clip-ar);
+		max-width: 100vw;
+		max-height: 100dvh;
 	}
 	/* Favorites-view back chevron (0.9.0): a frosted circle top-left, matching the rail chrome. */
 	.back-chip {

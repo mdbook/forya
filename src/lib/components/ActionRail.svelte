@@ -1,3 +1,13 @@
+<script module lang="ts">
+	// A long-press that navigates to /liked leaves the pointer DOWN; the trailing pointerup/click
+	// then lands on the NEXT view's rail heart (same screen spot) and would toggle (UNSTAR) it —
+	// a per-instance flag doesn't survive the route change. This MODULE-LEVEL one-shot flag, set
+	// when the long-press fires and checked in the heart click, survives the navigation + the fresh
+	// component instance and swallows exactly that one spurious click. Cleared by any fresh
+	// deliberate press (heartDown), so it can't strand a later real tap. (#1344)
+	let suppressNextHeartTap = false;
+</script>
+
 <script lang="ts">
 	// The single control surface (SPEC §4): a fixed right-side rail (TikTok-style)
 	// acting on the ACTIVE card. One instance, not per-card — Feed wires the
@@ -56,18 +66,19 @@
 		onhide: () => void;
 	} = $props();
 
-	// 0.9.0: LONG-PRESS the heart (~500ms) opens the favorites view; a plain tap toggles the
-	// star. A pointer that lifts or cancels before the timer is a tap (timer cleared); once the
-	// long-press fires we flag it so the trailing click doesn't ALSO toggle.
+	// 0.9.0: LONG-PRESS the heart (~500ms) opens the favorites view; a plain tap toggles the star.
+	// A pointer that lifts/cancels before the timer is a tap (timer cleared). When the long-press
+	// fires we set the MODULE-LEVEL suppress flag (see the module script) so the trailing click —
+	// which navigation re-targets onto the NEXT view's heart, a DIFFERENT instance — is swallowed
+	// instead of unstarring the first favorites clip (#1344). A fresh press clears any stale flag.
 	const LONG_PRESS_MS = 500;
 	let lpTimer: ReturnType<typeof setTimeout> | undefined;
-	let lpFired = false;
 	function heartDown() {
+		suppressNextHeartTap = false; // a fresh, deliberate press is always a real interaction
 		if (!onopenliked) return; // no entry target (e.g. on the favorites view itself)
-		lpFired = false;
 		clearTimeout(lpTimer);
 		lpTimer = setTimeout(() => {
-			lpFired = true;
+			suppressNextHeartTap = true; // swallow the trailing click nav re-targets to the next heart
 			onopenliked?.();
 		}, LONG_PRESS_MS);
 	}
@@ -75,8 +86,8 @@
 		clearTimeout(lpTimer);
 	}
 	function heartClick() {
-		if (lpFired) {
-			lpFired = false; // the long-press already opened the view — swallow this tap
+		if (suppressNextHeartTap) {
+			suppressNextHeartTap = false; // the long-press already opened the view — swallow this tap
 			return;
 		}
 		onstar();
