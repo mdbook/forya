@@ -195,6 +195,22 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.8.7 — play-overlay external-control sync (activeShowPlay)
+
+Gotcha:
+
+- **The play-button overlay reads `activeShowPlay`, NOT `activePaused`.** `activePaused` is the
+  cure's synchronous play-INTENT (Feed.svelte:811), set only in tap/gesture handlers — it does
+  NOT observe external media-key play/pause (BT button, AirPods, lock screen), which iOS routes
+  to the active `<video>`. `activeShowPlay` is a SEPARATE overlay-display var driven by
+  active-slot-gated `play`/`pause` listeners (rAF-coalesced), so the overlay tracks every
+  source. **Keep them distinct:** never bind the overlay back to `activePaused` (loses external
+  sync), and never drive `activePaused` from raw play/pause events (mis-fires the cure's
+  reconcile → the M6 black-flicker, :811). Double-tap-to-like shows the same brief overlay flash
+  as before (both vars flip true→false across the inter-tap gap; masked by the heart-burst) —
+  gesture-suppression (suppress while `inLikeSeq`, trailing settled read) is the fast-follow if
+  it's ever disliked.
+
 ## 0.8.6 — recycle wrong-fit flash (applyFit `useElementDims`)
 
 Extends the 0.8.2 element-dims fit. Gotcha:

@@ -147,10 +147,17 @@
 	let activeBuffering = $state(false);
 	let activeBlocked = $state(false);
 	let activePaused = $state(false);
+	// 0.8.7 (#1307): the play-button overlay's OWN view of the active clip's paused state, kept
+	// DISTINCT from `activePaused` (the cure's synchronous play-INTENT, :811) — driven by the
+	// active element's real play/pause events so EXTERNAL toggles (BT button, AirPods, lock
+	// screen) sync the overlay too, not just on-screen taps. See scheduleShowPlaySync.
+	let activeShowPlay = $state(false);
 	let activeCurrentTime = $state(0);
 	let activeDuration = $state(0);
 	// Monotonic token cancelling stale async play retries on the active element.
 	let playGen = 0;
+	// 0.8.7 (#1307): rAF token coalescing overlay paused-state syncs (see scheduleShowPlaySync).
+	let showPlaySyncRaf = 0;
 	// The clip NAME driveActive last STARTED (reset to t=0). Tracks fresh arrivals so a clip
 	// restarts from the top when you land on it (TikTok-style) instead of resuming the muted
 	// off-screen pre-roll the post-bless neighbour accumulated — without re-seeking on every
@@ -491,6 +498,18 @@
 		// The canplay self-heal (shouldRetryOnPlayable) recovers a
 		// cold card whose first muted-autoplay rejected before its buffer arrived.
 		tryPlayActive(v);
+	}
+
+	// 0.8.7 (#1307): sync the play-button overlay to the active element's SETTLED paused state.
+	// rAF-coalesced so a double-tap's pause→play churn (or a transient src-swap pause) collapses
+	// to ONE read instead of flashing the overlay — the M6-flicker class (:811). Observe-ONLY:
+	// never calls play()/pause(), never writes `activePaused` (cure intent stays byte-identical).
+	function scheduleShowPlaySync() {
+		cancelAnimationFrame(showPlaySyncRaf);
+		showPlaySyncRaf = requestAnimationFrame(() => {
+			const v = activeVideo();
+			if (v) activeShowPlay = v.paused;
+		});
 	}
 
 	function registerSlot(name: string, el: HTMLElement | null) {
@@ -1134,6 +1153,17 @@
 			v.addEventListener('ended', () => {
 				if (s === activeSlot() && autoAdvance) scrollTo(activeIndex + 1);
 			});
+			// 0.8.7 (#1307): keep the play-button overlay synced to the active clip's REAL paused
+			// state for EVERY source — tap, BT button, AirPods, lock screen. iOS routes media-key
+			// play/pause to the active <video>, firing these native events; we coalesce to the
+			// settled state. Active slot ONLY — neighbours play/pause constantly (recycle/drive)
+			// and must be ignored. `activePaused` (cure intent) is untouched.
+			v.addEventListener('play', () => {
+				if (s === activeSlot()) scheduleShowPlaySync();
+			});
+			v.addEventListener('pause', () => {
+				if (s === activeSlot()) scheduleShowPlaySync();
+			});
 			v.addEventListener('error', () => onPoolError(s));
 			pool.push(v);
 		}
@@ -1147,6 +1177,7 @@
 							// new card: reset the active-card UI state until it reports
 							activeBlocked = false;
 							activePaused = false;
+							activeShowPlay = false; // 0.8.7 (#1307): overlay resets with the card; play/pause listeners re-sync
 							activeCurrentTime = 0;
 							activeDuration = 0;
 							activeIndex = idx;
@@ -1187,6 +1218,7 @@
 			clearTimeout(seqTimer);
 			for (const t of heartTimers) clearTimeout(t);
 			clearInterval(debugTimer);
+			cancelAnimationFrame(showPlaySyncRaf);
 			for (const url in prewarmControllers) prewarmControllers[url].abort(); // #5d cleanup
 			for (const v of pool) {
 				v.pause();
@@ -1275,7 +1307,7 @@
 						revealed={revealedByName[item.name] ?? false}
 						buffering={i === activeIndex && activeBuffering}
 						blocked={i === activeIndex && activeBlocked}
-						paused={i === activeIndex && activePaused}
+						paused={i === activeIndex && activeShowPlay}
 						currentTime={i === activeIndex ? activeCurrentTime : 0}
 						duration={i === activeIndex ? activeDuration : 0}
 						onslot={(el) => registerSlot(item.name, el)}
