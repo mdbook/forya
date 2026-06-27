@@ -37,6 +37,7 @@
 		settings={data.settings}
 		total={data.total}
 		seed={data.seed}
+		starred={data.starred}
 	/>
 {/if}
 

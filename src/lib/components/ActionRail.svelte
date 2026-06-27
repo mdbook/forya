@@ -28,6 +28,7 @@
 		onmute,
 		onautoadvance,
 		onstar,
+		onopenliked,
 		onshare,
 		oninfo,
 		onhide
@@ -47,10 +48,39 @@
 		/** Toggle the active card's favorite mark (the a11y / instant path; double-tap is the
 		 *  gesture equivalent). */
 		onstar: () => void;
+		/** LONG-PRESS the heart (~500ms) opens the favorites view. Optional — absent on the
+		 *  favorites view itself (no self-entry there). A plain tap stays onstar. 0.9.0. */
+		onopenliked?: () => void;
 		onshare: () => void;
 		oninfo: () => void;
 		onhide: () => void;
 	} = $props();
+
+	// 0.9.0: LONG-PRESS the heart (~500ms) opens the favorites view; a plain tap toggles the
+	// star. A pointer that lifts or cancels before the timer is a tap (timer cleared); once the
+	// long-press fires we flag it so the trailing click doesn't ALSO toggle.
+	const LONG_PRESS_MS = 500;
+	let lpTimer: ReturnType<typeof setTimeout> | undefined;
+	let lpFired = false;
+	function heartDown() {
+		if (!onopenliked) return; // no entry target (e.g. on the favorites view itself)
+		lpFired = false;
+		clearTimeout(lpTimer);
+		lpTimer = setTimeout(() => {
+			lpFired = true;
+			onopenliked?.();
+		}, LONG_PRESS_MS);
+	}
+	function heartCancel() {
+		clearTimeout(lpTimer);
+	}
+	function heartClick() {
+		if (lpFired) {
+			lpFired = false; // the long-press already opened the view — swallow this tap
+			return;
+		}
+		onstar();
+	}
 </script>
 
 <div class="rail">
@@ -73,7 +103,11 @@
 		<button
 			class="rail-btn heart-btn"
 			class:starred
-			onclick={onstar}
+			onclick={heartClick}
+			onpointerdown={heartDown}
+			onpointerup={heartCancel}
+			onpointercancel={heartCancel}
+			onpointerleave={heartCancel}
 			aria-label={starred ? 'Remove from favorites' : 'Add to favorites'}
 			aria-pressed={starred}
 		>
@@ -147,6 +181,12 @@
 		color: #000;
 	}
 
+	/* The heart also LONG-PRESSES to open the favorites view (0.9.0) — suppress the iOS
+	   long-press callout/selection so the hold reads as a gesture, not a text action. */
+	.heart-btn {
+		-webkit-touch-callout: none;
+		user-select: none;
+	}
 	/* Favorited: a filled red heart (the icon's `fill` is set inline). Distinct from the
 	   white `.on` toggle style so "favorited" reads as a heart, not a generic active button. */
 	.heart-btn.starred {

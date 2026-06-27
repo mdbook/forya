@@ -3,6 +3,7 @@ import { config } from '$lib/server/config';
 import { getFeed, seededShuffle } from '$lib/server/videos';
 import { hiddenSetSync } from '$lib/server/hidden';
 import { enrichItems } from '$lib/server/probe';
+import { readStarred } from '$lib/server/starred';
 
 // First page of the feed, sized so a huge directory doesn't inline a multi-MB
 // manifest into the SSR payload (0.3.1 — the dominant mobile load cost). The
@@ -39,6 +40,10 @@ export const load: PageServerLoad = async () => {
 		seed,
 		total: shuffled.length,
 		warming,
+		// SSR-seed the starred set so the client paints filled hearts on the FIRST frame (no
+		// empty→filled flash on reload). readStarred is a cached in-mem read = latency-neutral
+		// (AC-3); [] when the feature is off so the payload stays byte-identical pre-0.9.0. 0.9.0.
+		starred: config.starred ? await readStarred() : [],
 		// Enrich only the page we send (bounded, cache-read-only); identity when
 		// DATA_DIR is off, so the payload stays byte-identical (0.5/M2).
 		items: await enrichItems(shuffled.slice(0, FIRST_PAGE)),

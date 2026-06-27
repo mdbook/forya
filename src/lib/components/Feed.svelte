@@ -22,12 +22,15 @@
 	// unmuted play() off-gesture — every play() is muted, unmute is only ever a flip on an
 	// already-playing element. Decoder count is bounded by POOL_SIZE (< the old ~6).
 	import { onMount, untrack } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { SvelteSet } from 'svelte/reactivity';
 	import VideoCard from './VideoCard.svelte';
 	import ActionRail from './ActionRail.svelte';
 	import Undo2 from '@lucide/svelte/icons/undo-2';
 	import Copy from '@lucide/svelte/icons/copy';
 	import Heart from '@lucide/svelte/icons/heart';
+	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import type { FeedItem, FeedSettings } from '$lib/types';
 	import {
 		saveMute,
@@ -46,7 +49,9 @@
 		feedName,
 		settings,
 		total,
-		seed
+		seed,
+		starred = [],
+		likedView = false
 	}: {
 		/** First page of the randomized feed (SSR'd); the rest is lazy-loaded. */
 		items: FeedItem[];
@@ -57,6 +62,12 @@
 		/** Per-request shuffle seed — threaded to /api/feed so each lazily-fetched page
 		 *  continues the SAME order (deterministic seededShuffle). */
 		seed: number;
+		/** Starred names SSR-seeded into starredSet at init so filled hearts paint on the FIRST
+		 *  frame — no empty→filled flash on a reload onto a favorited clip (0.9.0). [] when off. */
+		starred?: string[];
+		/** True on the /liked favorites view: render a back chevron and DISABLE the long-press
+		 *  entry (no self-navigation). The main feed leaves it false. 0.9.0. */
+		likedView?: boolean;
 	} = $props();
 
 	// 0.3.1 lazy-load: `items` is only the first page (slim SSR). `extra` accumulates
@@ -1077,16 +1088,28 @@
 		autoAdvance = loadAutoAdvance(feedName, settings.autoAdvance);
 		for (const n of loadHidden(feedName)) hidden.add(n);
 
-		// Seed the starred set from the server once (the overlay for the rail heart). Decoupled
-		// from the feed manifest — a single small fetch, gated on the feature; failure is silent
-		// (the heart just starts empty). 0.8.0.
-		if (settings.starred) {
-			fetch('/api/starred')
-				.then((r) => (r.ok ? r.json() : null))
-				.then((d: { starred?: string[] } | null) => {
-					if (d?.starred) for (const n of d.starred) starredSet.add(n);
-				})
-				.catch(() => {});
+		// Seed the starred set SYNCHRONOUSLY from the SSR payload (0.9.0) so the first paint
+		// already shows filled hearts — no empty→filled flash on a hard reload onto a favorited
+		// clip. SSR-seeded in +page.server (`config.starred ? readStarred() : []`), a cached
+		// in-mem read = latency-neutral. Replaces the old async GET /api/starred fetch that raced
+		// first paint. Decoupled from the feed manifest; gated on the feature.
+		if (settings.starred) for (const n of starred) starredSet.add(n);
+
+		// Discoverability for the hidden long-press-to-open-favorites gesture (0.9.0): a one-time
+		// hint toast, shown once per feed (localStorage), only on the main feed (not the favorites
+		// view itself). Reuses the mode-toast surface; silent if localStorage is unavailable.
+		if (settings.starred && !likedView) {
+			try {
+				const hintKey = `forya:likedHint:${feedName}`;
+				if (!localStorage.getItem(hintKey)) {
+					modeToast = 'Hold ♥ to see your likes';
+					clearTimeout(modeTimer);
+					modeTimer = setTimeout(() => (modeToast = null), 3500);
+					localStorage.setItem(hintKey, '1');
+				}
+			} catch {
+				/* localStorage blocked (private mode) — skip the hint */
+			}
 		}
 
 		// Seed the SERVER hidden set (0.8.3) so a clip hidden on ANOTHER device stays hidden
@@ -1302,6 +1325,8 @@
 					<VideoCard
 						{item}
 						active={i === activeIndex}
+						showStarred={settings.starred}
+						starred={starredSet.has(item.name)}
 						{viewportAR}
 						posters={settings.posters}
 						revealed={revealedByName[item.name] ?? false}
@@ -1333,10 +1358,18 @@
 		onmute={toggleMute}
 		onautoadvance={toggleAutoAdvance}
 		onstar={onRailStar}
+		onopenliked={likedView ? undefined : () => goto(resolve('/liked'))}
 		onshare={() => share(activeItem)}
 		oninfo={toggleInfo}
 		onhide={() => hide(activeItem?.name)}
 	/>
+	{#if likedView}
+		<!-- Favorites view (0.9.0): a back chevron to the main feed. A real <a> so it's
+		     keyboard-accessible + SvelteKit client-navigates. -->
+		<a class="back-chip" href={resolve('/')} aria-label="Back to feed">
+			<ChevronLeft size={26} aria-hidden="true" />
+		</a>
+	{/if}
 	{#if bursting}
 		{#key burstTick}
 			<div class="burst" aria-hidden="true"><Heart size={96} fill="currentColor" /></div>
@@ -1617,6 +1650,26 @@
 		margin-bottom: 0.15rem;
 	}
 
+	/* Favorites-view back chevron (0.9.0): a frosted circle top-left, matching the rail chrome. */
+	.back-chip {
+		position: fixed;
+		top: calc(env(safe-area-inset-top) + 0.75rem);
+		left: calc(env(safe-area-inset-left) + 0.75rem);
+		z-index: 20;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 2.75rem;
+		height: 2.75rem;
+		color: #fff;
+		background: rgba(0, 0, 0, 0.4);
+		border: 1px solid rgba(255, 255, 255, 0.15);
+		border-radius: 50%;
+		backdrop-filter: blur(8px);
+	}
+	.back-chip:active {
+		transform: scale(0.92);
+	}
 	.mode-toast {
 		position: fixed;
 		left: 50%;

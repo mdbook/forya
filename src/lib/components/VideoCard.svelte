@@ -9,12 +9,15 @@
 	// gestures (tap, seek) are reported back out. The single IntersectionObserver still
 	// lives in Feed and drives `active`.
 	import Play from '@lucide/svelte/icons/play';
+	import Heart from '@lucide/svelte/icons/heart';
 	import { pickFit } from '$lib/fit';
 	import type { FeedItem } from '$lib/types';
 
 	let {
 		item,
 		active,
+		showStarred,
+		starred,
 		viewportAR,
 		posters,
 		revealed,
@@ -30,6 +33,10 @@
 	}: {
 		item: FeedItem;
 		active: boolean;
+		/** The favorite (starred) feature is on (DATA_DIR set) — gate the on-card heart. */
+		showStarred: boolean;
+		/** This clip is in the starred set → show a filled heart badge on the card (0.9.0). */
+		starred: boolean;
 		/** Viewport aspect ratio (w/h), reactive — drives object-fit so the card
 		 *  re-letterboxes on rotate/resize. */
 		viewportAR: number;
@@ -168,6 +175,16 @@
 		<span class="caption">{item.name}</span>
 	</div>
 
+	<!-- On-card FAVORITE badge (0.9.0): a filled heart shown when this clip is starred, so a
+	     liked clip reads as liked on the card itself — not just the active-only side rail (the
+	     operator never saw that). Purely presentational: aria-hidden + pointer-events:none,
+	     zero playback/cure contact (mirrors the tap-hint overlay). -->
+	{#if showStarred && starred}
+		<div class="fav-badge" aria-hidden="true">
+			<Heart size={22} fill="currentColor" />
+		</div>
+	{/if}
+
 	{#if showSpinner}
 		<div class="spinner" aria-hidden="true"></div>
 	{/if}
@@ -303,6 +320,16 @@
 		outline-offset: -4px;
 	}
 
+	.fav-badge {
+		position: absolute;
+		top: calc(env(safe-area-inset-top) + 0.6rem);
+		left: calc(env(safe-area-inset-left) + 0.6rem);
+		z-index: 2;
+		display: flex;
+		color: #ff2d55; /* matches the rail's filled heart (ActionRail .heart-btn.starred) */
+		pointer-events: none;
+		filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.55));
+	}
 	.tap-hint {
 		position: absolute;
 		inset: 0;
