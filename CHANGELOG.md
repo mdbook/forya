@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.9.0 — favorites view (long-press the heart) + reliable filled-heart indicator
+
+The double-tap / rail-heart favorite (0.8.0) gains a home. All client-side and presentational;
+the byte-serve (Range) path and the favorite cheap-scan latency are untouched.
+
+- **Favorites view** (`/liked`): long-press the rail heart to open your liked clips as a feed,
+  **newest-liked-first**, rendered by the same player (works with or without posters). A
+  persistent "♥ Favorites" header chip + a back chevron, and an empty state when nothing's liked.
+  Sources the in-memory manifest + the small `starred.json` (`readStarredOrdered`) — zero new
+  directory scan or per-file stat, so the cheap-scan stays byte-identical.
+- **Reliable filled-heart indicator**: the rail heart fills the instant you scroll to an
+  already-liked clip, painted on the first frame (SSR-seeded) with no empty→filled flash on
+  reload. The starred store now preserves insertion order so the view can list newest-first.
+- **Enter/leave feedback**: transient "Entered favorites" / "Left favorites" toasts.
+
 ## 0.8.7 — play-button overlay syncs with external play/pause (BT/AirPods/lock-screen)
 
 The center play-button overlay only updated on on-screen taps: it keyed on `activePaused`,

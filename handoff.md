@@ -195,6 +195,28 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.9.0 — favorites view (/liked) + long-press entry + SSR-seeded heart
+
+Gotchas:
+
+- **The favorites view (`/liked`) reuses `<Feed>`** over the starred-filtered manifest, newest-
+  liked-first (`readStarredOrdered`, reversed). The whole list is sent up front
+  (`total = items.length`) so the client never lazy-fetches the MAIN feed; the `likedView` prop
+  gates the back chevron + the "♥ Favorites" chip and DISABLES the long-press entry. It sources the
+  in-memory manifest + `starred.json` only — NO new CIFS scan (the ~30ms cheap-scan stays clean).
+- **`starred.json` now preserves INSERTION order** (`persist` dropped the `.sort()`); `readStarred`
+  still sorts for the GET seed, `readStarredOrdered` preserves order for the view (reversed =
+  newest-liked-first). An idempotent re-PUT is a Set no-op (no reorder).
+- **The rail heart is the SOLE liked-indicator** (an on-card badge was tried + removed). It is
+  SSR-seeded at component INIT (`untrack`-wrapped, from the `starred` page-load prop) so filled
+  hearts paint on the first frame including SSR — no empty→filled flash on reload.
+- **Long-press-to-open uses a MODULE-LEVEL suppress flag** (`ActionRail` `<script module>`,
+  `suppressNextHeartTap`): the long-press navigates while the pointer is still down, so the trailing
+  click lands on the NEXT view's heart (a DIFFERENT component instance) and would unstar it. The
+  module flag survives the route change + the fresh instance, swallowing exactly that one click;
+  it's cleared by any fresh press. Do NOT move it back to per-instance state — that reintroduces the
+  unlike bug (#1344).
+
 ## 0.8.7 — play-overlay external-control sync (activeShowPlay)
 
 Gotcha:

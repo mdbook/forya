@@ -45,6 +45,10 @@ serving backend. See [`handoff.md`](./handoff.md) for the full story.
   share/save, an info overlay, and an optional client-side hide control
   (`ALLOW_HIDE`) — all on a single right-side rail. Plus a seek bar on the
   active card.
+- **Favorites** (needs `DATA_DIR`): double-tap a clip — or tap the rail heart —
+  to favorite it; the heart fills on clips you've already liked. Long-press the
+  heart to open a **Favorites view** (`/liked`): your liked clips as a feed,
+  newest first. Persisted as a small `starred.json`; inert when no data volume.
 - **Installable PWA**: per-instance home-screen name, standalone portrait.
 - **Self-contained**: serves UI + bytes from one image; runs non-root.
 - Desktop fallback: ↑/↓ + `j`/`k` to move, Space to play/pause, `m` to mute.
@@ -108,6 +112,8 @@ what the `/api/feed` endpoint still returns by default.
 - `GET /api/feed` — JSON manifest: `{ feed, items: [{ name, url, size, mtime, type }] }`. `?shuffle=1&seed=N` for a deterministic shuffle; `?offset=O&limit=L` to paginate (used by the page's lazy-load). No params → the full mtime-desc list.
 - `GET|HEAD /api/media/<name>` — the video bytes, with full Range support.
 - `GET /api/poster/<name>?v=<mtime>` — the generated JPEG poster, or `204` when none yet (needs `DATA_DIR`).
+- `GET /liked` — the favorites view (your liked clips as a feed, newest first; needs `DATA_DIR`).
+- `GET /api/starred` — `{ enabled, starred: string[] }`; `PUT|DELETE /api/starred/<name>` toggles a favorite (needs `DATA_DIR`).
 - `GET /api/healthz` — `200 ok` (healthcheck).
 - `GET /manifest.webmanifest` — the PWA manifest, branded with `FEED_NAME`.
 
