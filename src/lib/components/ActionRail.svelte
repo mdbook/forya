@@ -1,3 +1,13 @@
+<script module lang="ts">
+	// A long-press that navigates to /liked leaves the pointer DOWN; the trailing pointerup/click
+	// then lands on the NEXT view's rail heart (same screen spot) and would toggle (UNSTAR) it —
+	// a per-instance flag doesn't survive the route change. This MODULE-LEVEL one-shot flag, set
+	// when the long-press fires and checked in the heart click, survives the navigation + the fresh
+	// component instance and swallows exactly that one spurious click. Cleared by any fresh
+	// deliberate press (heartDown), so it can't strand a later real tap. (#1344)
+	let suppressNextHeartTap = false;
+</script>
+
 <script lang="ts">
 	// The single control surface (SPEC §4): a fixed right-side rail (TikTok-style)
 	// acting on the ACTIVE card. One instance, not per-card — Feed wires the
@@ -28,6 +38,7 @@
 		onmute,
 		onautoadvance,
 		onstar,
+		onopenliked,
 		onshare,
 		oninfo,
 		onhide
@@ -47,10 +58,40 @@
 		/** Toggle the active card's favorite mark (the a11y / instant path; double-tap is the
 		 *  gesture equivalent). */
 		onstar: () => void;
+		/** LONG-PRESS the heart (~500ms) opens the favorites view. Optional — absent on the
+		 *  favorites view itself (no self-entry there). A plain tap stays onstar. 0.9.0. */
+		onopenliked?: () => void;
 		onshare: () => void;
 		oninfo: () => void;
 		onhide: () => void;
 	} = $props();
+
+	// 0.9.0: LONG-PRESS the heart (~500ms) opens the favorites view; a plain tap toggles the star.
+	// A pointer that lifts/cancels before the timer is a tap (timer cleared). When the long-press
+	// fires we set the MODULE-LEVEL suppress flag (see the module script) so the trailing click —
+	// which navigation re-targets onto the NEXT view's heart, a DIFFERENT instance — is swallowed
+	// instead of unstarring the first favorites clip (#1344). A fresh press clears any stale flag.
+	const LONG_PRESS_MS = 500;
+	let lpTimer: ReturnType<typeof setTimeout> | undefined;
+	function heartDown() {
+		suppressNextHeartTap = false; // a fresh, deliberate press is always a real interaction
+		if (!onopenliked) return; // no entry target (e.g. on the favorites view itself)
+		clearTimeout(lpTimer);
+		lpTimer = setTimeout(() => {
+			suppressNextHeartTap = true; // swallow the trailing click nav re-targets to the next heart
+			onopenliked?.();
+		}, LONG_PRESS_MS);
+	}
+	function heartCancel() {
+		clearTimeout(lpTimer);
+	}
+	function heartClick() {
+		if (suppressNextHeartTap) {
+			suppressNextHeartTap = false; // the long-press already opened the view — swallow this tap
+			return;
+		}
+		onstar();
+	}
 </script>
 
 <div class="rail">
@@ -73,7 +114,11 @@
 		<button
 			class="rail-btn heart-btn"
 			class:starred
-			onclick={onstar}
+			onclick={heartClick}
+			onpointerdown={heartDown}
+			onpointerup={heartCancel}
+			onpointercancel={heartCancel}
+			onpointerleave={heartCancel}
 			aria-label={starred ? 'Remove from favorites' : 'Add to favorites'}
 			aria-pressed={starred}
 		>
@@ -147,6 +192,12 @@
 		color: #000;
 	}
 
+	/* The heart also LONG-PRESSES to open the favorites view (0.9.0) — suppress the iOS
+	   long-press callout/selection so the hold reads as a gesture, not a text action. */
+	.heart-btn {
+		-webkit-touch-callout: none;
+		user-select: none;
+	}
 	/* Favorited: a filled red heart (the icon's `fill` is set inline). Distinct from the
 	   white `.on` toggle style so "favorited" reads as a heart, not a generic active button. */
 	.heart-btn.starred {

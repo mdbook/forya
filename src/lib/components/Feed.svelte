@@ -22,12 +22,15 @@
 	// unmuted play() off-gesture — every play() is muted, unmute is only ever a flip on an
 	// already-playing element. Decoder count is bounded by POOL_SIZE (< the old ~6).
 	import { onMount, untrack } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { SvelteSet } from 'svelte/reactivity';
 	import VideoCard from './VideoCard.svelte';
 	import ActionRail from './ActionRail.svelte';
 	import Undo2 from '@lucide/svelte/icons/undo-2';
 	import Copy from '@lucide/svelte/icons/copy';
 	import Heart from '@lucide/svelte/icons/heart';
+	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import type { FeedItem, FeedSettings } from '$lib/types';
 	import {
 		saveMute,
@@ -46,7 +49,9 @@
 		feedName,
 		settings,
 		total,
-		seed
+		seed,
+		starred = [],
+		likedView = false
 	}: {
 		/** First page of the randomized feed (SSR'd); the rest is lazy-loaded. */
 		items: FeedItem[];
@@ -57,6 +62,12 @@
 		/** Per-request shuffle seed — threaded to /api/feed so each lazily-fetched page
 		 *  continues the SAME order (deterministic seededShuffle). */
 		seed: number;
+		/** Starred names SSR-seeded into starredSet at init so filled hearts paint on the FIRST
+		 *  frame — no empty→filled flash on a reload onto a favorited clip (0.9.0). [] when off. */
+		starred?: string[];
+		/** True on the /liked favorites view: render a back chevron and DISABLE the long-press
+		 *  entry (no self-navigation). The main feed leaves it false. 0.9.0. */
+		likedView?: boolean;
 	} = $props();
 
 	// 0.3.1 lazy-load: `items` is only the first page (slim SSR). `extra` accumulates
@@ -105,6 +116,12 @@
 	let undoTimer: ReturnType<typeof setTimeout> | undefined;
 	let modeToast = $state<string | null>(null);
 	let modeTimer: ReturnType<typeof setTimeout> | undefined;
+	// Show a transient message on the shared mode-toast surface (auto-dismiss after `ms`).
+	function showModeToast(msg: string, ms = 2000) {
+		modeToast = msg;
+		clearTimeout(modeTimer);
+		modeTimer = setTimeout(() => (modeToast = null), ms);
+	}
 	let copyToast = $state(false);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
 	let infoOpen = $state(false);
@@ -737,12 +754,18 @@
 	}
 
 	// ── Starred / favorite mark (0.8.0) ──────────────────────────────────────────────
-	// Client-side reactive set (mirrors `hidden`): the single source of truth for the
-	// rail heart's filled state + the gesture feedback. Seeded from GET /api/starred on
-	// mount (when the feature is on) and updated OPTIMISTICALLY on toggle, with a
-	// PUT/DELETE to persist (rolled back on failure). Fully decoupled from the feed
-	// manifest — a mark never rescans or touches the pooled-<video> machine.
+	// Client-side reactive set (mirrors `hidden`): the single source of truth for the rail
+	// heart + the on-card heart badge + the gesture feedback. SSR-SEEDED from the `starred`
+	// prop AT COMPONENT INIT (0.9.0) — this runs during SSR too, so the server emits filled
+	// hearts and a hard reload onto a favorited clip never flashes empty (AC-2c). Updated
+	// OPTIMISTICALLY on toggle with a PUT/DELETE to persist (rolled back on failure). Fully
+	// decoupled from the feed manifest — a mark never rescans or touches the pooled-<video> machine.
 	const starredSet = new SvelteSet<string>();
+	// untrack: seed ONCE from the INITIAL prop values (runs in SSR + at init), intentionally NOT
+	// a reactive dependency — the user's later toggles own the set, a re-seed would re-add removals.
+	untrack(() => {
+		if (settings.starred) for (const n of starred) starredSet.add(n);
+	});
 	// M6 gesture state machine (operator-locked, review-gated C1–C5). ONE window (review
 	// #733 — collapsed from two near-equal constants): a tap within SEQ_WINDOW_MS of the
 	// prior on the SAME active card continues the sequence; that much silence ends it.
@@ -1077,16 +1100,38 @@
 		autoAdvance = loadAutoAdvance(feedName, settings.autoAdvance);
 		for (const n of loadHidden(feedName)) hidden.add(n);
 
-		// Seed the starred set from the server once (the overlay for the rail heart). Decoupled
-		// from the feed manifest — a single small fetch, gated on the feature; failure is silent
-		// (the heart just starts empty). 0.8.0.
+		// (starredSet is SSR-seeded from the `starred` prop at component INIT — see its
+		// declaration — so filled hearts paint on the first frame, SSR included; no onMount seed.)
+
+		// Enter/leave/hint toasts (0.9.0) — ONE transient message per mount on the shared mode-toast
+		// surface. Favorites view → "Entered favorites". Main feed → "Left favorites" if we just came
+		// BACK from it (a one-shot sessionStorage flag set on /liked teardown, since it unmounts
+		// before this mounts), else the one-time long-press hint (localStorage, per feed).
 		if (settings.starred) {
-			fetch('/api/starred')
-				.then((r) => (r.ok ? r.json() : null))
-				.then((d: { starred?: string[] } | null) => {
-					if (d?.starred) for (const n of d.starred) starredSet.add(n);
-				})
-				.catch(() => {});
+			if (likedView) {
+				showModeToast('Entered favorites', 1800);
+			} else {
+				let leftLiked = false;
+				try {
+					leftLiked = sessionStorage.getItem('forya:leftLiked') === '1';
+					if (leftLiked) sessionStorage.removeItem('forya:leftLiked');
+				} catch {
+					/* sessionStorage blocked — skip */
+				}
+				if (leftLiked) {
+					showModeToast('Left favorites', 1800);
+				} else {
+					try {
+						const hintKey = `forya:likedHint:${feedName}`;
+						if (!localStorage.getItem(hintKey)) {
+							showModeToast('Hold ♥ to see your likes', 3500);
+							localStorage.setItem(hintKey, '1');
+						}
+					} catch {
+						/* localStorage blocked — skip the hint */
+					}
+				}
+			}
 		}
 
 		// Seed the SERVER hidden set (0.8.3) so a clip hidden on ANOTHER device stays hidden
@@ -1205,6 +1250,15 @@
 		}
 
 		return () => {
+			// 0.9.0: leaving the favorites view → flag it so the main feed shows a "Left favorites"
+			// toast on arrival (this component unmounts before the main feed mounts). One-shot.
+			if (likedView) {
+				try {
+					sessionStorage.setItem('forya:leftLiked', '1');
+				} catch {
+					/* sessionStorage blocked — skip the leave toast */
+				}
+			}
 			io?.disconnect();
 			feedEl?.removeEventListener('touchstart', onTouchStart);
 			feedEl?.removeEventListener('touchmove', onTouchMove);
@@ -1333,10 +1387,25 @@
 		onmute={toggleMute}
 		onautoadvance={toggleAutoAdvance}
 		onstar={onRailStar}
+		onopenliked={likedView ? undefined : () => goto(resolve('/liked'))}
 		onshare={() => share(activeItem)}
 		oninfo={toggleInfo}
 		onhide={() => hide(activeItem?.name)}
 	/>
+	{#if likedView}
+		<!-- Favorites view (0.9.0): a persistent "♥ Favorites" header chip beside the back chevron
+		     (operator's mock "‹ ♥ Favorites") so you always know where you are. Decorative —
+		     pointer-events:none, the back chevron stays the control. -->
+		<div class="fav-header" aria-hidden="true">
+			<Heart size={16} color="#ff2d55" fill="#ff2d55" />
+			<span>Favorites</span>
+		</div>
+		<!-- Back chevron to the main feed. A real <a> so it's keyboard-accessible + SvelteKit
+		     client-navigates. -->
+		<a class="back-chip" href={resolve('/')} aria-label="Back to feed">
+			<ChevronLeft size={26} aria-hidden="true" />
+		</a>
+	{/if}
 	{#if bursting}
 		{#key burstTick}
 			<div class="burst" aria-hidden="true"><Heart size={96} fill="currentColor" /></div>
@@ -1617,6 +1686,47 @@
 		margin-bottom: 0.15rem;
 	}
 
+	/* Favorites view (0.9.0): a persistent "♥ Favorites" header chip beside the back chevron,
+	   matching the rail/back chrome. Decorative (pointer-events:none); the chevron is the control. */
+	.fav-header {
+		position: fixed;
+		top: calc(env(safe-area-inset-top) + 0.75rem);
+		left: calc(env(safe-area-inset-left) + 4rem);
+		z-index: 20;
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		height: 2.75rem;
+		padding: 0 0.9rem;
+		color: #fff;
+		background: rgba(0, 0, 0, 0.4);
+		border: 1px solid rgba(255, 255, 255, 0.15);
+		border-radius: 999px;
+		backdrop-filter: blur(8px);
+		pointer-events: none;
+		font-size: 0.9rem;
+		font-weight: 600;
+	}
+	/* Favorites-view back chevron (0.9.0): a frosted circle top-left, matching the rail chrome. */
+	.back-chip {
+		position: fixed;
+		top: calc(env(safe-area-inset-top) + 0.75rem);
+		left: calc(env(safe-area-inset-left) + 0.75rem);
+		z-index: 20;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 2.75rem;
+		height: 2.75rem;
+		color: #fff;
+		background: rgba(0, 0, 0, 0.4);
+		border: 1px solid rgba(255, 255, 255, 0.15);
+		border-radius: 50%;
+		backdrop-filter: blur(8px);
+	}
+	.back-chip:active {
+		transform: scale(0.92);
+	}
 	.mode-toast {
 		position: fixed;
 		left: 50%;
