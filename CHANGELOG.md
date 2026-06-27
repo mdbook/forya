@@ -4,6 +4,20 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.8.7 — play-button overlay syncs with external play/pause (BT/AirPods/lock-screen)
+
+The center play-button overlay only updated on on-screen taps: it keyed on `activePaused`,
+the cure's synchronous play-INTENT, set imperatively in the tap/gesture handlers. The pooled
+`<video>` had no `pause`/`play` listener, so an external media-key toggle — the Bluetooth
+button, AirPods, the lock screen — fired native play/pause on the active element that nothing
+observed, leaving the overlay stale (paused yet no play button, or vice-versa).
+
+- **A separate `activeShowPlay` state now drives the overlay,** fed by active-slot-gated
+  `play`/`pause` listeners that reflect the active element's real paused state. `activePaused`
+  (the cure intent) is byte-identical, so the playback/cure machine and the M6 double-tap
+  behaviour are unchanged. Observe-only: no new `play()`/`pause()` path. Operator-verified
+  on-device (the overlay now tracks BT/AirPods/lock-screen, not just taps).
+
 ## 0.8.6 — recycle wrong-fit flash (applyFit uses manifest dims on src-swap)
 
 A follow-on to the 0.8.2 element-dims fit. On a pool recycle, `applyFit` ran before
