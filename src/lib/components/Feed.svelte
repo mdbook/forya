@@ -1714,7 +1714,7 @@
 		inset: 0;
 		z-index: 5;
 		pointer-events: none;
-		box-shadow: inset 0 0 90px 4px rgba(255, 45, 85, 0.16);
+		box-shadow: inset 0 0 50px 4px rgba(255, 45, 85, 0.24);
 	}
 	/* Letterboxed/pillarboxed (contain) clips: size the glow to the CENTERED video rect (the
 	   largest box of the clip's aspect ratio that fits the viewport) so it hugs the video, not the
