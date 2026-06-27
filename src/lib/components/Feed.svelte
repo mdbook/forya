@@ -116,6 +116,12 @@
 	let undoTimer: ReturnType<typeof setTimeout> | undefined;
 	let modeToast = $state<string | null>(null);
 	let modeTimer: ReturnType<typeof setTimeout> | undefined;
+	// Show a transient message on the shared mode-toast surface (auto-dismiss after `ms`).
+	function showModeToast(msg: string, ms = 2000) {
+		modeToast = msg;
+		clearTimeout(modeTimer);
+		modeTimer = setTimeout(() => (modeToast = null), ms);
+	}
 	let copyToast = $state(false);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
 	let infoOpen = $state(false);
@@ -1097,20 +1103,34 @@
 		// (starredSet is SSR-seeded from the `starred` prop at component INIT — see its
 		// declaration — so filled hearts paint on the first frame, SSR included; no onMount seed.)
 
-		// Discoverability for the hidden long-press-to-open-favorites gesture (0.9.0): a one-time
-		// hint toast, shown once per feed (localStorage), only on the main feed (not the favorites
-		// view itself). Reuses the mode-toast surface; silent if localStorage is unavailable.
-		if (settings.starred && !likedView) {
-			try {
-				const hintKey = `forya:likedHint:${feedName}`;
-				if (!localStorage.getItem(hintKey)) {
-					modeToast = 'Hold ♥ to see your likes';
-					clearTimeout(modeTimer);
-					modeTimer = setTimeout(() => (modeToast = null), 3500);
-					localStorage.setItem(hintKey, '1');
+		// Enter/leave/hint toasts (0.9.0) — ONE transient message per mount on the shared mode-toast
+		// surface. Favorites view → "Entered favorites". Main feed → "Left favorites" if we just came
+		// BACK from it (a one-shot sessionStorage flag set on /liked teardown, since it unmounts
+		// before this mounts), else the one-time long-press hint (localStorage, per feed).
+		if (settings.starred) {
+			if (likedView) {
+				showModeToast('Entered favorites', 1800);
+			} else {
+				let leftLiked = false;
+				try {
+					leftLiked = sessionStorage.getItem('forya:leftLiked') === '1';
+					if (leftLiked) sessionStorage.removeItem('forya:leftLiked');
+				} catch {
+					/* sessionStorage blocked — skip */
 				}
-			} catch {
-				/* localStorage blocked (private mode) — skip the hint */
+				if (leftLiked) {
+					showModeToast('Left favorites', 1800);
+				} else {
+					try {
+						const hintKey = `forya:likedHint:${feedName}`;
+						if (!localStorage.getItem(hintKey)) {
+							showModeToast('Hold ♥ to see your likes', 3500);
+							localStorage.setItem(hintKey, '1');
+						}
+					} catch {
+						/* localStorage blocked — skip the hint */
+					}
+				}
 			}
 		}
 
@@ -1230,6 +1250,15 @@
 		}
 
 		return () => {
+			// 0.9.0: leaving the favorites view → flag it so the main feed shows a "Left favorites"
+			// toast on arrival (this component unmounts before the main feed mounts). One-shot.
+			if (likedView) {
+				try {
+					sessionStorage.setItem('forya:leftLiked', '1');
+				} catch {
+					/* sessionStorage blocked — skip the leave toast */
+				}
+			}
 			io?.disconnect();
 			feedEl?.removeEventListener('touchstart', onTouchStart);
 			feedEl?.removeEventListener('touchmove', onTouchMove);
@@ -1327,8 +1356,6 @@
 					<VideoCard
 						{item}
 						active={i === activeIndex}
-						showStarred={settings.starred}
-						starred={starredSet.has(item.name)}
 						{viewportAR}
 						posters={settings.posters}
 						revealed={revealedByName[item.name] ?? false}
@@ -1366,8 +1393,12 @@
 		onhide={() => hide(activeItem?.name)}
 	/>
 	{#if likedView}
-		<!-- Favorites view (0.9.0): a back chevron to the main feed. A real <a> so it's
-		     keyboard-accessible + SvelteKit client-navigates. -->
+		<!-- Favorites view (0.9.0): a barely-there red edge glow signalling "you're in favorites"
+		     (the on-card heart was removed; the rail heart is the per-clip indicator). Fixed,
+		     pointer-events:none inset vignette in the favorite red — tune opacity on-device. -->
+		<div class="fav-glow" aria-hidden="true"></div>
+		<!-- Back chevron to the main feed. A real <a> so it's keyboard-accessible + SvelteKit
+		     client-navigates. -->
 		<a class="back-chip" href={resolve('/')} aria-label="Back to feed">
 			<ChevronLeft size={26} aria-hidden="true" />
 		</a>
@@ -1652,6 +1683,15 @@
 		margin-bottom: 0.15rem;
 	}
 
+	/* Favorites view (0.9.0): a barely-there red inset glow at the viewport edges signalling
+	   "you're in favorites". pointer-events:none; very low opacity (tune on-device). */
+	.fav-glow {
+		position: fixed;
+		inset: 0;
+		z-index: 5;
+		pointer-events: none;
+		box-shadow: inset 0 0 90px 4px rgba(255, 45, 85, 0.16);
+	}
 	/* Favorites-view back chevron (0.9.0): a frosted circle top-left, matching the rail chrome. */
 	.back-chip {
 		position: fixed;
