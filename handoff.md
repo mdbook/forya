@@ -195,6 +195,20 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.8.6 — recycle wrong-fit flash (applyFit `useElementDims`)
+
+Extends the 0.8.2 element-dims fit. Gotcha:
+
+- **On a pool RECYCLE the `<video>` still holds the OUTGOING clip's
+  `videoWidth/Height`** — reassigning `src` does not empty the element synchronously — so
+  `applyFit(v, item)` trusting `v.videoWidth` painted a transient wrong fit (cover/contain
+  inverted on orientation-heterogeneous neighbours) until `loadedmetadata`. The recycle
+  path now calls `applyFit(v, item, /* useElementDims */ false)` to force the incoming
+  clip's MANIFEST dims; the active-card and rotation re-fits keep the default (real, loaded
+  dims). **If you add a new `applyFit` caller, decide deliberately:** a PRE-`src`-load call
+  must pass `false` (element dims are stale/outgoing); a post-`loadedmetadata` call keeps
+  the default.
+
 ## 0.8.5 — cache-key correctness (scan-cache `cheap` + poster mtime)
 
 Two keying bugs from the post-0.8.4 adversarial review (#2, #3). Gotchas:

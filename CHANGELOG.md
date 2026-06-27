@@ -4,6 +4,23 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.8.6 — recycle wrong-fit flash (applyFit uses manifest dims on src-swap)
+
+A follow-on to the 0.8.2 element-dims fit. On a pool recycle, `applyFit` ran before
+`v.src` was reassigned while the pooled `<video>` still held the OUTGOING clip's
+`videoWidth/Height` — the element is not emptied synchronously when `src` is reassigned
+— so a truthy-stale element dim won over the incoming clip's manifest dims and painted a
+transient WRONG fit (cover/contain inverted on orientation-heterogeneous neighbours)
+until `loadedmetadata` re-fit.
+
+- **`applyFit` gains `useElementDims` (default true); the recycle path passes `false`**
+  to force the incoming clip's manifest dims (the element's own dims are about to be
+  discarded). The active card and rotation re-fits keep the default (real, loaded dims);
+  `loadedmetadata` still re-fits the recycled slot with the new clip's real dims once it
+  loads. Presentation-only: the 9 cure fns and the start-paused guarantee are
+  byte-identical, and the `pickFit` math is unchanged (still covered by `fit.test.ts`).
+  Operator-verified on-device (no wrong-crop flash across portrait/landscape neighbours).
+
 ## 0.8.5 — cache-correctness hardening (scan-cache key + poster meta key)
 
 Two latent keying bugs from the post-0.8.4 adversarial review. Both are correctness
