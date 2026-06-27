@@ -97,7 +97,11 @@ async function loadSet(dataDir: string): Promise<Set<string>> {
 async function persist(dataDir: string, set: Set<string>): Promise<void> {
 	const full = starredPath(dataDir);
 	if (!full) return;
-	const body = JSON.stringify({ version: STARRED_VERSION, starred: [...set].sort() });
+	// Preserve Set INSERTION order on disk (newest-marked last) — the favorites view (0.9.0)
+	// reads it via readStarredOrdered() and reverses for newest-liked-first. readStarred() still
+	// sorts for the GET seed (order-agnostic there). A re-mark of an existing name is a Set no-op
+	// (keeps its original position), so an idempotent re-PUT never reorders.
+	const body = JSON.stringify({ version: STARRED_VERSION, starred: [...set] });
 	const tmp = `${full}.tmp.${process.pid}.${tmpSeq++}`;
 	try {
 		await fsp.mkdir(path.dirname(full), { recursive: true });
@@ -117,6 +121,14 @@ async function persist(dataDir: string, set: Set<string>): Promise<void> {
 export async function readStarred(dataDir: string = config.dataDir): Promise<string[]> {
 	if (dataDir === '') return [];
 	return [...(await loadSet(dataDir))].sort();
+}
+
+/** The starred names in INSERTION order (oldest-marked first), or [] when disabled. The
+ *  favorites view (0.9.0) reverses this for newest-liked-first. Never throws; ZERO fs when
+ *  disabled; cache-read after the first load. (readStarred sorts; this preserves order.) */
+export async function readStarredOrdered(dataDir: string = config.dataDir): Promise<string[]> {
+	if (dataDir === '') return [];
+	return [...(await loadSet(dataDir))];
 }
 
 /**

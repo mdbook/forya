@@ -10,6 +10,7 @@ import path from 'node:path';
 import {
 	clearStarredCache,
 	readStarred,
+	readStarredOrdered,
 	setStarred,
 	starredEnabled,
 	starredPath
@@ -101,6 +102,29 @@ describe('starred — enabled round-trip (explicit dataDir)', () => {
 		await setStarred('persist.mp4', true, dir);
 		clearStarredCache();
 		expect(await readStarred(dir)).toEqual(['persist.mp4']);
+	});
+
+	it('preserves insertion order on disk (newest-first source); readStarred stays sorted', async () => {
+		await setStarred('z.mp4', true, dir);
+		await setStarred('a.mp4', true, dir);
+		await setStarred('m.mp4', true, dir);
+		// readStarredOrdered = insertion order — the 0.9.0 view reverses this for newest-first.
+		expect(await readStarredOrdered(dir)).toEqual(['z.mp4', 'a.mp4', 'm.mp4']);
+		// readStarred stays sorted (the GET seed is order-agnostic — a client Set).
+		expect(await readStarred(dir)).toEqual(['a.mp4', 'm.mp4', 'z.mp4']);
+		// order survives a cache drop (read back from disk, not just the in-mem Set).
+		clearStarredCache();
+		expect(await readStarredOrdered(dir)).toEqual(['z.mp4', 'a.mp4', 'm.mp4']);
+	});
+
+	it('idempotent re-mark does NOT bump order; unlike→re-like appends as newest', async () => {
+		await setStarred('first.mp4', true, dir);
+		await setStarred('second.mp4', true, dir);
+		await setStarred('first.mp4', true, dir); // re-mark existing → Set no-op, no reorder
+		expect(await readStarredOrdered(dir)).toEqual(['first.mp4', 'second.mp4']);
+		await setStarred('first.mp4', false, dir);
+		await setStarred('first.mp4', true, dir); // unlike→re-like → appended at the end
+		expect(await readStarredOrdered(dir)).toEqual(['second.mp4', 'first.mp4']);
 	});
 
 	it('a missing or corrupt starred.json reads back as [] (never throws)', async () => {
