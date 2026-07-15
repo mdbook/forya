@@ -15,29 +15,44 @@
 // "which physical element shows which card" decision — the part that's easy to get subtly
 // wrong — is testable in isolation.
 
-/** The radius of the coverage window for a pool of `n` elements: how many cards on
- *  EACH side of the active card carry an element. n=3 → 1 (prev/cur/next); n=5 → 2. */
-export function poolRadius(n: number): number {
-	return Math.floor((Math.max(1, n) - 1) / 2);
-}
-
-/** The contiguous set of card indices the pool should cover for `activeIndex`, given `n`
- *  elements and `total` cards. A window of `min(n, total)` indices that ALWAYS contains
- *  `activeIndex`, centred on it but shifted to stay within `[0, total-1]` so every element
- *  is used (near the top/bottom we bias the window inward rather than waste a slot). */
-export function coverage(activeIndex: number, n: number, total: number): number[] {
-	if (total <= 0 || n <= 0) return [];
-	const size = Math.min(n, total);
-	const r = poolRadius(n);
-	let start = activeIndex - r;
-	if (start < 0) start = 0;
-	let end = start + size - 1;
-	if (end > total - 1) {
-		end = total - 1;
-		start = end - size + 1;
-	}
+/**
+ * The nearest `n` VIDEO card indices to `activeIndex`, scanning OUTWARD past non-video (image
+ * gallery) items — nearest-first, `activeIndex` included when it is itself a video. This is the
+ * pool's coverage on a feed that mixes videos and galleries. Galleries are never pooled (no
+ * `<video>`, no decoder), so a positional ±window would, on a gallery-heavy feed, come back all-
+ * galleries and leave the pool EMPTY — tearing down every nearby video's decoder so the next
+ * video you scroll to cold-starts blank (the round-1 regression). Instead we keep the closest
+ * `n` VIDEOS warm no matter how many galleries sit between them, so a video is always pre-rolling
+ * before you reach it (the same warm-neighbour guarantee a pure-video feed has).
+ *
+ * `isVideo(i)` = whether `visible[i]` is a video (not a gallery). On a PURE-VIDEO feed this
+ * returns the SAME SET as a centred ±window (`coverage` did): the nearest n videos to
+ * `activeIndex` ARE `active ± floor((n-1)/2)` clamped — so the pool behaves byte-identically
+ * where there are no galleries. Result length ≤ n (fewer only when the feed has < n videos
+ * total). Order is nearest-first; `reassignPool` is set-based for kept slots, so order only
+ * picks which physical slot a freshly-covered video lands in (slots are interchangeable).
+ */
+export function nearestVideos(
+	activeIndex: number,
+	isVideo: (i: number) => boolean,
+	total: number,
+	n: number
+): number[] {
 	const out: number[] = [];
-	for (let i = start; i <= end; i++) out.push(i);
+	if (total <= 0 || n <= 0) return out;
+	// Defensive clamp: a stale/out-of-range activeIndex must not silently empty the pool (it's
+	// clamped by every caller today, but the contract shouldn't depend on that). Center the scan
+	// on the nearest in-range index.
+	const a = Math.max(0, Math.min(total - 1, activeIndex));
+	const consider = (i: number) => {
+		if (out.length >= n || i < 0 || i >= total) return;
+		if (isVideo(i)) out.push(i);
+	};
+	consider(a);
+	for (let d = 1; d < total && out.length < n; d++) {
+		consider(a - d);
+		consider(a + d);
+	}
 	return out;
 }
 

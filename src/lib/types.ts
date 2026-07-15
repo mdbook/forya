@@ -1,6 +1,17 @@
 // Shared feed types (client + server). Populated by the dir scan in
 // src/lib/server/videos.ts (milestone 02).
 
+/** One frame of a photo-post gallery (TikTok photo mode, image-galleries milestone).
+ *  A gallery `FeedItem` carries an ordered `media[]` of these; a video item has none. */
+export interface MediaFrame {
+	/** Frame filename (basename), e.g. `7184…_01.jpg` (Contract A `<id>_NN.<ext>`). */
+	name: string;
+	/** Media URL: `/api/media/<encoded name>` (served by the same Range endpoint as videos). */
+	url: string;
+	/** MIME type, e.g. `image/jpeg`. */
+	type: string;
+}
+
 /** A single playable item in the feed manifest. */
 export interface FeedItem {
 	/** Original filename (basename) under VIDEO_DIR. */
@@ -29,6 +40,14 @@ export interface FeedItem {
 	height?: number;
 	/** Duration in seconds. */
 	duration?: number;
+	// Image galleries (TikTok photo posts). ADDITIVE — absent on a video item, so the video
+	// FeedItem shape is byte-identical to pre-galleries. Present ⇒ this item is a photo-post
+	// GALLERY: `media[]` is its frames in carousel order (Contract A `<id>_NN.<ext>`, grouped
+	// by id in the scan). `name` is the bare post `<id>` (one post = one unit for
+	// starred/hidden/share/manifest keying); `url`/`type` mirror the FIRST frame (share/info
+	// fallback). A gallery is rendered by ImageCarousel and NEVER touches the <video> pool.
+	/** Ordered gallery frames; present ⇒ photo-post gallery, absent ⇒ video. */
+	media?: MediaFrame[];
 }
 
 /** The `/api/feed` response shape. */

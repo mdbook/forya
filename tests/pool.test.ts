@@ -3,48 +3,79 @@
 // shows which card as the active index moves, preserving bindings (no needless reload) and
 // using every slot. The DOM/iOS side lives in Feed.svelte; this is the testable core.
 import { describe, expect, it } from 'vitest';
-import { coverage, poolRadius, reassignPool } from '../src/lib/pool';
+import { nearestVideos, reassignPool } from '../src/lib/pool';
 
-describe('poolRadius', () => {
-	it('n=3 → radius 1 (prev/cur/next)', () => expect(poolRadius(3)).toBe(1));
-	it('n=5 → radius 2 (±2)', () => expect(poolRadius(5)).toBe(2));
-	it('n=2 → radius 0 (cur + one neighbour)', () => expect(poolRadius(2)).toBe(0));
-	it('n=1 → radius 0', () => expect(poolRadius(1)).toBe(0));
-});
+const allVideos = () => true;
 
-describe('coverage (the cards that should carry an element)', () => {
-	it('centres on the active card mid-feed (n=3 → prev/cur/next)', () => {
-		expect(coverage(5, 3, 20)).toEqual([4, 5, 6]);
+describe('nearestVideos: pure-video feed == the old centred ±window (no behavior change)', () => {
+	it('centres on the active card mid-feed (n=3 → {prev,cur,next})', () => {
+		expect(nearestVideos(5, allVideos, 20, 3).sort((a, b) => a - b)).toEqual([4, 5, 6]);
 	});
 
 	it('biases inward at the top so no slot is wasted (active=0, n=3 → 0,1,2)', () => {
-		expect(coverage(0, 3, 20)).toEqual([0, 1, 2]);
+		expect(nearestVideos(0, allVideos, 20, 3).sort((a, b) => a - b)).toEqual([0, 1, 2]);
 	});
 
 	it('biases inward at the bottom (active=last, n=3 → last-2..last)', () => {
-		expect(coverage(19, 3, 20)).toEqual([17, 18, 19]);
-	});
-
-	it('always contains the active index', () => {
-		for (let a = 0; a < 20; a++) expect(coverage(a, 3, 20)).toContain(a);
-		for (let a = 0; a < 20; a++) expect(coverage(a, 5, 20)).toContain(a);
+		expect(nearestVideos(19, allVideos, 20, 3).sort((a, b) => a - b)).toEqual([17, 18, 19]);
 	});
 
 	it('n=5 covers ±2 mid-feed', () => {
-		expect(coverage(10, 5, 50)).toEqual([8, 9, 10, 11, 12]);
+		expect(nearestVideos(10, allVideos, 50, 5).sort((a, b) => a - b)).toEqual([8, 9, 10, 11, 12]);
 	});
 
-	it('clamps the window size to the feed when total < n', () => {
-		expect(coverage(0, 3, 2)).toEqual([0, 1]);
-		expect(coverage(1, 3, 2)).toEqual([0, 1]);
+	it('always includes the active index (when it is a video)', () => {
+		for (let a = 0; a < 20; a++) expect(nearestVideos(a, allVideos, 20, 3)).toContain(a);
+		for (let a = 0; a < 20; a++) expect(nearestVideos(a, allVideos, 20, 5)).toContain(a);
 	});
 
-	it('single-item feed → just [0]', () => {
-		expect(coverage(0, 3, 1)).toEqual([0]);
+	it('nearest-first order: active video first, then closest outward', () => {
+		expect(nearestVideos(5, allVideos, 20, 3)).toEqual([5, 4, 6]);
 	});
 
-	it('empty feed → []', () => {
-		expect(coverage(0, 3, 0)).toEqual([]);
+	it('clamps to the feed when it has fewer videos than n', () => {
+		expect(nearestVideos(0, allVideos, 2, 3).sort((a, b) => a - b)).toEqual([0, 1]);
+		expect(nearestVideos(1, allVideos, 2, 3).sort((a, b) => a - b)).toEqual([0, 1]);
+	});
+
+	it('single-item feed → [0]; empty feed → []', () => {
+		expect(nearestVideos(0, allVideos, 1, 3)).toEqual([0]);
+		expect(nearestVideos(0, allVideos, 0, 3)).toEqual([]);
+	});
+});
+
+describe('nearestVideos: gallery-aware (the #1417 regression fix)', () => {
+	const isVideo = (vids: number[]) => (i: number) => vids.includes(i);
+
+	it('active is a GALLERY: excludes it, pools the nearest videos around it', () => {
+		// feed [G,G,V(2),G,V(4),G]; active on gallery 3 → nearest videos = 2 and 4 (gallery not pooled)
+		expect(nearestVideos(3, isVideo([2, 4]), 6, 3).sort((a, b) => a - b)).toEqual([2, 4]);
+	});
+
+	it('keeps the nearest videos WARM across a run of galleries (was: pool torn down → cold blank)', () => {
+		// 12 items, videos only at 0 and 11; active deep in galleries at 5 → still pools 0 and 11
+		expect(nearestVideos(5, isVideo([0, 11]), 12, 3).sort((a, b) => a - b)).toEqual([0, 11]);
+	});
+
+	it('active video with galleries adjacent: pools itself FIRST + the nearest other videos', () => {
+		// [V(0),G,G,V(3),G,V(5)]; active on V=3 → self first, then nearest videos 5 and 0
+		const got = nearestVideos(3, isVideo([0, 3, 5]), 6, 3);
+		expect(got[0]).toBe(3); // active video pooled first (it must play)
+		expect(got.sort((a, b) => a - b)).toEqual([0, 3, 5]);
+	});
+
+	it('no videos at all → [] (all-gallery feed: pool stays empty, zero bleed)', () => {
+		expect(nearestVideos(4, () => false, 10, 3)).toEqual([]);
+	});
+
+	it('one lone video among galleries → just that one, wherever the active card sits', () => {
+		expect(nearestVideos(2, isVideo([7]), 10, 3)).toEqual([7]);
+	});
+
+	it('defensive: an out-of-range activeIndex clamps in (does NOT silently empty the pool)', () => {
+		// past-the-end / negative index → clamp to the nearest in-range card, still pool N videos.
+		expect(nearestVideos(99, allVideos, 6, 3).sort((a, b) => a - b)).toEqual([3, 4, 5]);
+		expect(nearestVideos(-5, allVideos, 6, 3).sort((a, b) => a - b)).toEqual([0, 1, 2]);
 	});
 });
 

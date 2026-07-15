@@ -45,6 +45,20 @@ export function shareEnabled(dataDir: string = config.dataDir): boolean {
 	return dataDir !== '';
 }
 
+/**
+ * Full-carousel share (image galleries): pick which frame `/share/<token>/media?f=<frame>` may
+ * serve, from the token's OWN gallery `mediaNames` (the manifest allowlist). PURE + the I2 guard
+ * on the unauth surface: `frame` must be EXACTLY one of the token's own frames (Set membership,
+ * fail-closed → null), so a token for gallery X can never serve Y's frames or `?f=../..` traverse
+ * (the null propagates to a 404 before any fs touch; the picked name STILL passes
+ * `safeMediaPath`/lstat in `serve()` — defence in depth). No `?f` → the cover frame (frame 1).
+ * Returns the frame name to serve, or null to reject (404). Empty gallery → null.
+ */
+export function pickGalleryFrame(mediaNames: string[], frame: string | null): string | null {
+	if (frame === null) return mediaNames[0] ?? null; // no ?f → cover
+	return mediaNames.includes(frame) ? frame : null; // allowlisted to THIS gallery's frames
+}
+
 /** Resolve `share.json` under `dataDir`, or null when disabled. The token/name live INSIDE
  *  the doc, never in the path → no traversal vector here (the API still safeMediaPath-guards
  *  the resolved name). Asserted to stay directly under `dataDir` (defence in depth). */

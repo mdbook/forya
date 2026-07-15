@@ -16,7 +16,15 @@ const MIME_BY_EXT: Record<string, string> = {
 	'.mp4': 'video/mp4',
 	'.mov': 'video/quicktime',
 	'.webm': 'video/webm',
-	'.m4v': 'video/x-m4v'
+	'.m4v': 'video/x-m4v',
+	// Image-gallery frames (TikTok photo posts): served by the SAME /api/media Range endpoint,
+	// so this table is where their content-type comes from — without these a frame would serve
+	// as application/octet-stream and the browser would download it instead of rendering. Videos
+	// are unaffected (their four types are unchanged). Contract A allows jpg/jpeg/png/webp.
+	'.jpg': 'image/jpeg',
+	'.jpeg': 'image/jpeg',
+	'.png': 'image/png',
+	'.webp': 'image/webp'
 };
 
 /** MIME type from a filename's extension (SPEC §3 table). */
@@ -28,6 +36,15 @@ export function mimeFromExt(name: string): string {
 export function isVideoFile(name: string): boolean {
 	return (VIDEO_EXTENSIONS as readonly string[]).includes(path.extname(name).toLowerCase());
 }
+
+/** Contract A gallery frame: `<id>_NN.<ext>` — pure-digit post id, 2-digit zero-pad carousel
+ *  index (01-based), image ext. LOCKED shape (design #1380 / gate #1381): `_NN` is ALWAYS
+ *  present (a 1-image post is `<id>_01.jpg`), so grouping is unambiguous and a bare `<id>.jpg`
+ *  is NOT a gallery. STRICT — a name that isn't exactly this (`7_1.jpg`, `7_001.jpg`, `7.jpg`,
+ *  `foo_01.jpg`) is rejected, never best-effort grouped (gate AC-3 reject-nonmatching). The id
+ *  is pure digits (validated on the tiktok-sync WRITE side too, I2), so the only `_` is the
+ *  frame separator and a crafted id can't smuggle a `_NN`. */
+const FRAME_RE = /^(\d+)_(\d{2})\.(jpg|jpeg|png|webp)$/i;
 
 /** Dotfiles and `.partial` (tiktok-sync's mid-download files) — mirrors erin's
  *  IGNORE_HIDDEN_PATHS. */
@@ -116,10 +133,23 @@ async function doScan(
 	}
 
 	const items: FeedItem[] = [];
+	// Gallery frames accumulate here by post id (Contract A grouping): one photo post = N
+	// flat `<id>_NN.<ext>` frames → ONE gallery FeedItem (design #1380, gate AC-3). Plain
+	// object; ids are pure digits (FRAME_RE). Frames never per-file stat — a gallery carries
+	// no poster/mtime cache key, so it stays cheap even on the full-stat (poster) path.
+	const galleries: Record<string, { name: string; idx: string }[]> = {};
 	for (const ent of entries) {
 		if (!ent.isFile()) continue;
 		const name = ent.name;
 		if (ignoreHidden && isHidden(name)) continue;
+		// Gallery frame FIRST: a strict `<id>_NN.<ext>` groups; anything else falls through.
+		// A frame is an IMAGE, so it never matched isVideoFile — pre-galleries these were
+		// silently dropped; now they group. (`.part` mid-downloads fail FRAME_RE → excluded.)
+		const fm = FRAME_RE.exec(name);
+		if (fm) {
+			(galleries[fm[1]] ??= []).push({ name, idx: fm[2] });
+			continue;
+		}
 		if (!isVideoFile(name)) continue;
 		const item: FeedItem = {
 			name,
@@ -141,6 +171,21 @@ async function doScan(
 			item.mtime = st.mtimeMs;
 		}
 		items.push(item);
+	}
+
+	// Emit one gallery FeedItem per post id: frames ordered by the 2-digit `NN` (zero-padded,
+	// so lexicographic === carousel order). `name` = the bare `<id>` (one post = one unit for
+	// starred/hidden/share/manifest keying — a gallery name has no extension, so it can never
+	// collide with a video's `<id>.<ext>`). `url`/`type` mirror the first frame (share/info
+	// fallback); the carousel itself reads `media[]`. No size/mtime — a gallery needs neither.
+	for (const id in galleries) {
+		const frames = galleries[id].sort((a, b) => (a.idx < b.idx ? -1 : a.idx > b.idx ? 1 : 0));
+		const media = frames.map((f) => ({
+			name: f.name,
+			url: `/api/media/${encodeURIComponent(f.name)}`,
+			type: mimeFromExt(f.name)
+		}));
+		items.push({ name: id, url: media[0].url, type: media[0].type, media });
 	}
 
 	// Name-asc: a stable, deterministic total order over unique filenames so SSR +

@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { config } from '$lib/server/config';
-import { safeMediaPath } from '$lib/server/videos';
+import { getFeed, isVideoFile, safeMediaPath } from '$lib/server/videos';
 import { resolveShare } from '$lib/server/share';
 
 // GET /share/<token> — UNAUTH (the hub bypasses forward-auth for `/share/*` ONLY) — a minimal
@@ -61,6 +61,75 @@ function page(token: string, base: string): string {
 </html>`;
 }
 
+// Image-gallery share page (full-carousel, AC-5). A JS-FREE horizontal CSS scroll-snap rail of the
+// gallery's frames — the recipient swipes through ALL images, no player, no cure machine, nothing
+// to autoplay (bulletproof on the unauth surface, same ethos as the <video> page). Each frame is
+// served token-scoped via `?f=<frame>` (validated against this gallery's own media[] in the media
+// route). og:image = the cover frame (no `?f` → cover), so iOS renders a rich link CARD.
+function galleryPage(token: string, base: string, frameNames: string[]): string {
+	const shareUrl = enc(`${base}/share/${token}`);
+	const coverUrl = enc(`${base}/share/${token}/media`); // no ?f → cover frame, clean OG image
+	const n = frameNames.length;
+	const imgs = frameNames
+		.map((name, i) => {
+			const src = enc(`/share/${token}/media?f=${encodeURIComponent(name)}`);
+			return `<img src="${src}" alt="Photo ${i + 1} of ${n}" loading="${i === 0 ? 'eager' : 'lazy'}" draggable="false" />`;
+		})
+		.join('\n');
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="referrer" content="no-referrer" />
+<title>forya — shared gallery</title>
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="forya" />
+<meta property="og:title" content="forya — ${n}-photo gallery" />
+<meta property="og:description" content="A ${n}-photo gallery shared from forya — swipe through all ${n}." />
+<meta property="og:url" content="${shareUrl}" />
+<meta property="og:image" content="${coverUrl}" />
+<meta name="twitter:card" content="summary_large_image" />
+<style>
+  html,body{margin:0;height:100%;background:#000;}
+  .rail{display:flex;height:100dvh;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none;scroll-padding-inline:${n > 1 ? '7vw' : '0'};}
+  .rail::-webkit-scrollbar{display:none;}
+  /* A MULTI-image gallery sizes each frame to 86vw so the next/prev PEEK at the edges — a clear
+     JS-free "there's more, swipe" signal (a single-image gallery stays full-bleed). */
+  .rail img{flex:0 0 ${n > 1 ? '86vw' : '100%'};width:${n > 1 ? '86vw' : '100%'};height:100dvh;object-fit:contain;scroll-snap-align:center;background:#000;user-select:none;-webkit-user-select:none;}
+  .badge{position:fixed;top:calc(env(safe-area-inset-top) + 0.6rem);right:calc(env(safe-area-inset-right) + 0.6rem);padding:0.2rem 0.6rem;color:#fff;font:600 0.8rem system-ui,sans-serif;background:rgba(0,0,0,0.5);border-radius:999px;backdrop-filter:blur(6px);pointer-events:none;}
+</style>
+</head>
+<body>
+<div class="rail">
+${imgs}
+</div>
+<div class="badge" aria-hidden="true">\u{1F4F7} ${n}</div>
+</body>
+</html>`;
+}
+
+// A gallery whose frames aren't in the warm manifest yet (cold container, ~1-2s) — a minimal
+// meta-refresh page rather than a broken <video>. No OG tags (a crawler that hits it mid-warmup
+// gets nothing to cache, not a wrong video card); the reload lands the real carousel once warm.
+function retryPage(): string {
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="refresh" content="2" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="referrer" content="no-referrer" />
+<title>forya — loading…</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;color:rgba(255,255,255,0.7);font:600 0.95rem system-ui,sans-serif;}
+  body{display:flex;align-items:center;justify-content:center;}
+</style>
+</head>
+<body>Loading gallery…</body>
+</html>`;
+}
+
 export const GET: RequestHandler = async (event) => {
 	const { params } = event;
 	const resolved = await resolveShare(params.token, config.dataDir);
@@ -73,7 +142,27 @@ export const GET: RequestHandler = async (event) => {
 	// canonical public origin; fall back to the request origin when it is unset (dev / no base).
 	const base = (config.shareBase || event.url.origin).replace(/\/+$/, '');
 
-	return new Response(page(params.token, base), {
+	// A gallery token resolves to the bare `<id>` — look it up in the warm manifest and render the
+	// full-carousel page; a video/single FILE renders the <video> player. The lookup is a zero-fs
+	// in-memory read (getFeed never scans on the request path, and it kicks a background
+	// revalidate). A bare id NOT in the manifest = a gallery whose frames aren't warm yet (cold
+	// container ~1-2s) or a since-deleted gallery — render a meta-refresh RETRY page, NEVER the
+	// <video> page (which would show a broken player + wrong og:video for a photo post; code-audit).
+	const item = getFeed().items.find((i) => i.name === resolved.name);
+	let html: string;
+	if (item?.media && item.media.length) {
+		html = galleryPage(
+			params.token,
+			base,
+			item.media.map((m) => m.name)
+		);
+	} else if (isVideoFile(resolved.name)) {
+		html = page(params.token, base);
+	} else {
+		html = retryPage();
+	}
+
+	return new Response(html, {
 		headers: {
 			'content-type': 'text/html; charset=utf-8',
 			'referrer-policy': 'no-referrer',
