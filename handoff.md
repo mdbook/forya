@@ -195,6 +195,45 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.10.0 — image galleries (TikTok photo posts)
+
+Renders multi-image photo posts as swipeable carousels alongside videos. Cross-repo milestone with
+`tiktok-sync` (it lays the frames on disk; forya groups + renders). **Images-only** — the gallery
+soundtrack (`music.playUrl`, the orphan `<id>.m4a`/`.mp3` tiktok-sync used to delete) is a
+separate follow-up milestone, gated on iOS gallery-audio-vs-the-cure-machine design.
+
+Load-bearing:
+
+- **Contract A (the on-disk coupling):** gallery frames are flat `<id>_NN.<ext>` (2-digit
+  zero-pad carousel index, `_NN` ALWAYS incl. a 1-image post; ext jpg/jpeg/png/webp); videos stay
+  `<id>.<ext>`. `videos.ts` `doScan` groups frames by bare `<id>` into one gallery `FeedItem` with
+  an ordered `media[]` (`FRAME_RE`, STRICT — anything not exactly `<id>_NN.<ext>` is ignored, never
+  best-effort grouped). A gallery's `name` is the bare `<id>` (one post = one unit for
+  starred/hidden/share/manifest; disjoint from a video's `<id>.<ext>`). Frames are never per-file
+  stat'd (a gallery carries no poster/mtime key), so cheap-scan stays cheap.
+- **No pool bleed (the crown-jewel constraint):** a gallery renders `ImageCarousel`, which owns NO
+  pooled `<video>`, registers NO slot, and never touches the cure machine. `syncPool` pools the
+  **nearest N _videos_** (`pool.ts` `nearestVideos`, scanning outward past galleries) — NOT a
+  positional ±window (round-1's bug: an all-gallery window emptied the pool → the next video
+  cold-started blank). An active gallery ⇒ `activeSlot()` = -1 ⇒ `driveActive` early-returns after
+  warming video neighbours; `activePaused`/the bless are untouched. On a pure-video feed
+  `nearestVideos` == the old centred window, so the video path is byte-identical.
+- **`ImageCarousel` gesture:** finger-follow drag (real-time transform, rubber-band at ends, snap
+  by distance or flick); a genuine tap routes to Feed's `onTapGesture` (double-tap-to-like +
+  burst — every video-op in it no-ops when `activeVideo()` is null). **`touch-action: manipulation`
+  (NOT pan-y)** — pan-y left iOS double-tap-to-zoom on, which broke double-tap-SPAM after the first
+  like and pointercancelled in-progress swipes (#1442). No h-scroll ancestor, so `manipulation`
+  keeps the JS h-drag ours + the feed's vertical pan; matches VideoCard's tap target. A
+  pointercancel COMMITS the swipe (spurious cancel shouldn't revert a real swipe); the deactivate
+  reset is guarded on `!dragging` (a transient IO active-flip can't abort a live drag).
+- **I2 (frames serve securely):** frames go through the same `/api/media` → `serve()` path
+  (`safeMediaPath` + lstat-symlink-reject + Range) as videos; image MIME added to `mimeFromExt`.
+  Full-carousel share: the token mints on the bare `<id>`; `/share/<token>` renders a JS-free CSS
+  scroll-snap rail of all frames; each frame is served token-scoped via `?f=<frame>`, allowlisted
+  by the pure `pickGalleryFrame()` to THAT gallery's own `media[]` (a token can't serve another
+  gallery's frames or traverse). A stale round-1 token (minted on the cover-frame name) or a
+  warming manifest → a `retryPage` (meta-refresh), never a broken `<video>` page.
+
 ## 0.9.0 — favorites view (/liked) + long-press entry + SSR-seeded heart
 
 Gotchas:

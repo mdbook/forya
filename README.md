@@ -49,6 +49,11 @@ serving backend. See [`handoff.md`](./handoff.md) for the full story.
   to favorite it; the heart fills on clips you've already liked. Long-press the
   heart to open a **Favorites view** (`/liked`): your liked clips as a feed,
   newest first. Persisted as a small `starred.json`; inert when no data volume.
+- **Image galleries** (TikTok photo posts): multi-image posts render as swipeable
+  carousels alongside videos — finger-follow drag, index dots/counter, double-tap
+  to like, and a full-carousel share link. One photo post = one feed item (flat
+  `<id>_NN.<ext>` frames grouped by id). Images-only; the gallery soundtrack is a
+  follow-up. Galleries never touch the video decoder pool.
 - **Installable PWA**: per-instance home-screen name, standalone portrait.
 - **Self-contained**: serves UI + bytes from one image; runs non-root.
 - Desktop fallback: ↑/↓ + `j`/`k` to move, Space to play/pause, `m` to mute.
@@ -109,8 +114,8 @@ what the `/api/feed` endpoint still returns by default.
 ### Endpoints
 
 - `GET /` — the feed UI.
-- `GET /api/feed` — JSON manifest: `{ feed, items: [{ name, url, size, mtime, type }] }`. `?shuffle=1&seed=N` for a deterministic shuffle; `?offset=O&limit=L` to paginate (used by the page's lazy-load). No params → the full mtime-desc list.
-- `GET|HEAD /api/media/<name>` — the video bytes, with full Range support.
+- `GET /api/feed` — JSON manifest: `{ feed, items: [{ name, url, size, mtime, type }] }`. `?shuffle=1&seed=N` for a deterministic shuffle; `?offset=O&limit=L` to paginate (used by the page's lazy-load). No params → the full mtime-desc list. A photo-post **gallery** item additionally carries `media: [{ name, url, type }]` (its ordered frames); a video item has none.
+- `GET|HEAD /api/media/<name>` — the video (or gallery-frame) bytes, with full Range support.
 - `GET /api/poster/<name>?v=<mtime>` — the generated JPEG poster, or `204` when none yet (needs `DATA_DIR`).
 - `GET /liked` — the favorites view (your liked clips as a feed, newest first; needs `DATA_DIR`).
 - `GET /api/starred` — `{ enabled, starred: string[] }`; `PUT|DELETE /api/starred/<name>` toggles a favorite (needs `DATA_DIR`).

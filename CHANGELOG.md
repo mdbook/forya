@@ -4,6 +4,30 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.10.0 — image galleries (TikTok photo posts)
+
+forya now renders **photo posts** — multi-image "carousel" posts — as swipeable galleries
+**alongside** videos in the same feed. Content flows through the existing pipeline (tiktok-sync
+lays the images on disk, forya groups + renders them); no new service, no DB. **Images-only** in
+this release — a gallery's soundtrack is a follow-up.
+
+- **Swipeable galleries**: a photo post's frames render as a horizontal carousel with a
+  finger-follow drag (tracks your finger in real time, rubber-bands at the ends, snaps on release
+  by distance or flick), an index indicator (dots for a small gallery, an `N / M` counter for a
+  large one), accessible prev/next buttons, and per-frame letterboxing.
+- **One post = one item**: the dir-scan groups flat `<id>_NN.<ext>` frames by post id into a single
+  gallery item (ordered by index); like/favorite/hide/share and the `/liked` view all treat a
+  gallery as one unit. Videos are unchanged — a video item is byte-identical to before.
+- **Double-tap to like** works on a gallery exactly as on a video (heart burst included).
+- **Full-carousel share**: sharing a gallery mints a link whose page renders the **whole**
+  swipeable set (a bulletproof, script-free image rail); each frame is served token-scoped and
+  allowlisted to that gallery's own frames.
+- **No decoder cost**: galleries never touch the pooled-`<video>` cure machine — an image is never
+  a `<video>` source, a gallery consumes no decoder, and it can't perturb playback/sound of the
+  videos around it. The pool keeps the nearest _videos_ warm across runs of galleries.
+- **Range endpoint unchanged**: gallery frames serve through the same Range-correct `/api/media`
+  path (the byte math is untouched); image MIME types were added so a frame serves as `image/*`.
+
 ## 0.9.0 — favorites view (long-press the heart) + reliable filled-heart indicator
 
 The double-tap / rail-heart favorite (0.8.0) gains a home. All client-side and presentational;
