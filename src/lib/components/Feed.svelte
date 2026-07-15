@@ -26,6 +26,7 @@
 	import { resolve } from '$app/paths';
 	import { SvelteSet } from 'svelte/reactivity';
 	import VideoCard from './VideoCard.svelte';
+	import ImageCarousel from './ImageCarousel.svelte';
 	import ActionRail from './ActionRail.svelte';
 	import Undo2 from '@lucide/svelte/icons/undo-2';
 	import Copy from '@lucide/svelte/icons/copy';
@@ -415,7 +416,17 @@
 		// strand a kept clip's slot under a stale index. coverage() returns in-range indices, so
 		// visible[i] is always defined here.
 		const targetIdx = coverage(activeIndex, POOL_SIZE, totalCards);
-		const targetNames = targetIdx.map((i) => visible[i].name);
+		// Galleries (photo posts) are NOT pooled — they own no <video>, register no slot, and
+		// render via ImageCarousel. Exclude them from the pool's target set so an image is never
+		// assigned as a <video>.src and a gallery consumes no decoder. A gallery in the coverage
+		// window just yields fewer video names → reassignPool frees the extra slots; when a
+		// gallery is ACTIVE, its name isn't in slotToName so activeSlot()=-1 and driveActive
+		// early-returns after keeping the video neighbours warm — `activePaused` untouched (AC-4
+		// no-pool-bleed). This is the ONLY change to the pool machine; the video path is intact.
+		const targetNames = targetIdx
+			.map((i) => visible[i])
+			.filter((it) => !it.media)
+			.map((it) => it.name);
 		const next = reassignPool(slotToName, targetNames, POOL_SIZE);
 		// Cancel prewarm fetches for clips no longer in the new coverage window (#5d).
 		const wantedUrls: string[] = [];
@@ -552,10 +563,14 @@
 	 *  (AbortError → done) from an activation lapse (→ clipboard) and degrade gracefully. */
 	async function share(item: FeedItem | undefined) {
 		if (!item) return;
+		// A gallery's `name` is the bare post id (not a servable file), so share its COVER FRAME
+		// (a real file the /share/<token>/media route can serve) — item.url is already that frame.
+		// Full carousel-share is a follow-up; v1 shares the cover image. Video: shareName = name.
+		const shareName = item.media?.[0]?.name ?? item.name;
 		let url = new URL(item.url, location.origin).href; // pre-0.8.4 fallback: direct LAN URL
 		if (settings.shareBase) {
 			try {
-				const res = await fetch(`/api/share/${encodeURIComponent(item.name)}`);
+				const res = await fetch(`/api/share/${encodeURIComponent(shareName)}`);
 				if (res.ok) {
 					const d = (await res.json()) as { url?: string };
 					if (d?.url) url = d.url;
@@ -591,7 +606,7 @@
 		}
 		const a = document.createElement('a'); // last resort: direct download
 		a.href = url;
-		a.download = item.name;
+		a.download = shareName;
 		a.click();
 	}
 
@@ -1353,22 +1368,29 @@
 			     slot); off-window cards get a bare placeholder. -->
 			<div class="card" data-index={i} bind:this={cardEls[i]}>
 				{#if isLive(i)}
-					<VideoCard
-						{item}
-						active={i === activeIndex}
-						{viewportAR}
-						posters={settings.posters}
-						revealed={revealedByName[item.name] ?? false}
-						buffering={i === activeIndex && activeBuffering}
-						blocked={i === activeIndex && activeBlocked}
-						paused={i === activeIndex && activeShowPlay}
-						currentTime={i === activeIndex ? activeCurrentTime : 0}
-						duration={i === activeIndex ? activeDuration : 0}
-						onslot={(el) => registerSlot(item.name, el)}
-						onseek={seekActiveFrac}
-						onseekby={seekActiveBy}
-						ontap={onTapGesture}
-					/>
+					{#if item.media}
+						<!-- Photo-post gallery (Contract A): a swipeable ImageCarousel, NOT the pooled
+						     <video> shell. Registers no slot (no onslot) + syncPool filters it out of the
+						     pool target set → zero video-pool bleed (AC-4). Rail like/hide/share still act. -->
+						<ImageCarousel {item} active={i === activeIndex} {viewportAR} />
+					{:else}
+						<VideoCard
+							{item}
+							active={i === activeIndex}
+							{viewportAR}
+							posters={settings.posters}
+							revealed={revealedByName[item.name] ?? false}
+							buffering={i === activeIndex && activeBuffering}
+							blocked={i === activeIndex && activeBlocked}
+							paused={i === activeIndex && activeShowPlay}
+							currentTime={i === activeIndex ? activeCurrentTime : 0}
+							duration={i === activeIndex ? activeDuration : 0}
+							onslot={(el) => registerSlot(item.name, el)}
+							onseek={seekActiveFrac}
+							onseekby={seekActiveBy}
+							ontap={onTapGesture}
+						/>
+					{/if}
 				{:else}
 					<div class="card-rest">
 						<span class="card-rest-caption">{item.name}</span>

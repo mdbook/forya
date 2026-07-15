@@ -37,6 +37,13 @@ describe('mimeFromExt', () => {
 		expect(mimeFromExt('a.m4v')).toBe('video/x-m4v');
 	});
 
+	it('maps image-gallery frame extensions (Contract A)', () => {
+		expect(mimeFromExt('7_01.jpg')).toBe('image/jpeg');
+		expect(mimeFromExt('7_01.JPEG')).toBe('image/jpeg');
+		expect(mimeFromExt('7_01.png')).toBe('image/png');
+		expect(mimeFromExt('7_01.webp')).toBe('image/webp');
+	});
+
 	it('falls back for unknown extensions', () => {
 		expect(mimeFromExt('a.txt')).toBe('application/octet-stream');
 	});
@@ -117,6 +124,93 @@ describe('scanVideos', () => {
 	it('missing dir → empty feed, no throw', async () => {
 		const items = await scanVideos(path.join(dir, 'does-not-exist'), true);
 		expect(items).toEqual([]);
+	});
+});
+
+describe('scanVideos image galleries (Contract A: <id>_NN.<ext> grouping)', () => {
+	it('groups N frames of one post into ONE gallery item, media[] in carousel order', async () => {
+		// Out-of-order on disk + a 2-digit boundary (09→10) to prove numeric-correct ordering.
+		await write('700_02.jpg');
+		await write('700_10.jpg');
+		await write('700_01.jpg');
+		await write('700_09.jpg');
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(1);
+		const g = items[0];
+		expect(g.name).toBe('700'); // one post = one unit, keyed by the bare id
+		expect(g.media?.map((m) => m.name)).toEqual([
+			'700_01.jpg',
+			'700_02.jpg',
+			'700_09.jpg',
+			'700_10.jpg'
+		]);
+		expect(g.media?.map((m) => m.type)).toEqual([
+			'image/jpeg',
+			'image/jpeg',
+			'image/jpeg',
+			'image/jpeg'
+		]);
+		expect(g.media?.[0].url).toBe('/api/media/700_01.jpg');
+		expect(g.url).toBe('/api/media/700_01.jpg'); // representative (share/info fallback) = frame 1
+		expect(g.type).toBe('image/jpeg');
+		// A gallery carries no per-file size/mtime (no poster/cache key).
+		expect(g.size).toBeUndefined();
+		expect(g.mtime).toBeUndefined();
+	});
+
+	it('_NN is ALWAYS present: a 1-image post is a 1-frame gallery, NOT a bare file', async () => {
+		await write('42_01.jpg');
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(1);
+		expect(items[0].name).toBe('42');
+		expect(items[0].media?.map((m) => m.name)).toEqual(['42_01.jpg']);
+	});
+
+	it('preserves real image ext per frame (jpg/jpeg/png/webp)', async () => {
+		await write('9_01.png');
+		await write('9_02.webp');
+		const items = await scanVideos(dir, true);
+		expect(items[0].media?.map((m) => m.type)).toEqual(['image/png', 'image/webp']);
+	});
+
+	it('REJECTS non-conforming names (no best-effort grouping) — gate AC-3', async () => {
+		await write('7_1.jpg'); // 1-digit index → not a frame
+		await write('7_001.jpg'); // 3-digit index → not a frame
+		await write('7.jpg'); // bare image, no _NN → not a gallery
+		await write('foo_01.jpg'); // non-digit id → not a frame
+		await write('7_01.gif'); // unsupported ext → not a frame
+		const items = await scanVideos(dir, true);
+		expect(items).toEqual([]); // every one ignored, none grouped or guessed
+	});
+
+	it('videos and galleries coexist; the video FeedItem shape is unchanged', async () => {
+		await write('100.mp4');
+		await write('200_01.jpg');
+		await write('200_02.jpg');
+		const items = await scanVideos(dir, true);
+		// A video keeps its full filename as `name` (`100.mp4`); a gallery uses the bare id
+		// (`200`) — never colliding (a gallery name has no extension). name-asc: '1' < '2'.
+		expect(items.map((i) => i.name)).toEqual(['100.mp4', '200']);
+		const vid = items.find((i) => i.name === '100.mp4')!;
+		expect(vid.media).toBeUndefined(); // video: no media[] (identical to pre-galleries)
+		expect(vid.url).toBe('/api/media/100.mp4');
+		expect(vid.type).toBe('video/mp4');
+		const gal = items.find((i) => i.name === '200')!;
+		expect(gal.media).toHaveLength(2);
+	});
+
+	it('separate posts stay separate galleries', async () => {
+		await write('11_01.jpg');
+		await write('22_01.jpg');
+		await write('22_02.jpg');
+		const items = await scanVideos(dir, true);
+		expect(items.map((i) => i.name)).toEqual(['11', '22']);
+		expect(items.find((i) => i.name === '11')!.media).toHaveLength(1);
+		expect(items.find((i) => i.name === '22')!.media).toHaveLength(2);
+	});
+
+	it('safeMediaPath resolves a frame name (I2 read-side, served via /api/media)', () => {
+		expect(safeMediaPath('700_01.jpg', dir)).toBe(path.join(path.resolve(dir), '700_01.jpg'));
 	});
 });
 
