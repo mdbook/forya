@@ -10,6 +10,7 @@ import path from 'node:path';
 import {
 	clearShareCache,
 	mintShare,
+	pickGalleryFrame,
 	resolveShare,
 	revokeShare,
 	readShares,
@@ -29,6 +30,34 @@ describe('shareEnabled / sharePath (pure)', () => {
 	it('enabled → share.json directly under dataDir', () => {
 		expect(shareEnabled('/data')).toBe(true);
 		expect(sharePath('/data')).toBe(path.join(path.resolve('/data'), 'share.json'));
+	});
+});
+
+describe('pickGalleryFrame — full-carousel share allowlist (I2 on the unauth ?f= surface)', () => {
+	const frames = ['700_01.jpg', '700_02.jpg', '700_03.jpg'];
+
+	it('no ?f → the cover frame (frame 1)', () => {
+		expect(pickGalleryFrame(frames, null)).toBe('700_01.jpg');
+	});
+
+	it('an own frame → serves that frame', () => {
+		expect(pickGalleryFrame(frames, '700_02.jpg')).toBe('700_02.jpg');
+		expect(pickGalleryFrame(frames, '700_03.jpg')).toBe('700_03.jpg');
+	});
+
+	it('a foreign gallery frame → null (no cross-gallery serve / IDOR)', () => {
+		expect(pickGalleryFrame(frames, '999_01.jpg')).toBeNull();
+	});
+
+	it('a traversal / crafted path → null (fail-closed before serve; safeMediaPath is defence-in-depth)', () => {
+		expect(pickGalleryFrame(frames, '../../etc/passwd')).toBeNull();
+		expect(pickGalleryFrame(frames, '700_01.jpg/../../x')).toBeNull();
+		expect(pickGalleryFrame(frames, '')).toBeNull();
+	});
+
+	it('empty gallery → null even for the cover (no frame to serve)', () => {
+		expect(pickGalleryFrame([], null)).toBeNull();
+		expect(pickGalleryFrame([], '700_01.jpg')).toBeNull();
 	});
 });
 

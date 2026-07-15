@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { config } from '$lib/server/config';
-import { resolveShare } from '$lib/server/share';
+import { resolveShare, pickGalleryFrame } from '$lib/server/share';
 import { getFeed } from '$lib/server/videos';
 import { serve } from '$lib/server/mediaServe';
 
@@ -28,13 +28,15 @@ async function handle(
 
 	const item = getFeed().items.find((i) => i.name === resolved.name);
 	if (item?.media) {
-		// Gallery: serve a frame from the token's OWN gallery only (allowlist = its media[]).
-		const allow = new Set(item.media.map((m) => m.name));
-		if (frame !== null) {
-			if (!allow.has(frame)) error(404, 'not found'); // not this gallery's frame → no serve
-			return serve(frame, rangeHeader, method);
-		}
-		return serve(item.media[0].name, rangeHeader, method); // no frame → cover
+		// Gallery: `pickGalleryFrame` allowlists `?f` to THIS gallery's own frames (fail-closed →
+		// null → 404 before serve); no `?f` → cover. The picked name STILL passes safeMediaPath +
+		// lstat in serve() (defence in depth).
+		const pick = pickGalleryFrame(
+			item.media.map((m) => m.name),
+			frame
+		);
+		if (pick === null) error(404, 'not found');
+		return serve(pick, rangeHeader, method);
 	}
 
 	// Video / single clip — unchanged: pass only the resolved name (never the token) to the byte path.

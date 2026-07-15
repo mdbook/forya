@@ -40,14 +40,18 @@ export function nearestVideos(
 ): number[] {
 	const out: number[] = [];
 	if (total <= 0 || n <= 0) return out;
+	// Defensive clamp: a stale/out-of-range activeIndex must not silently empty the pool (it's
+	// clamped by every caller today, but the contract shouldn't depend on that). Center the scan
+	// on the nearest in-range index.
+	const a = Math.max(0, Math.min(total - 1, activeIndex));
 	const consider = (i: number) => {
 		if (out.length >= n || i < 0 || i >= total) return;
 		if (isVideo(i)) out.push(i);
 	};
-	consider(activeIndex);
+	consider(a);
 	for (let d = 1; d < total && out.length < n; d++) {
-		consider(activeIndex - d);
-		consider(activeIndex + d);
+		consider(a - d);
+		consider(a + d);
 	}
 	return out;
 }

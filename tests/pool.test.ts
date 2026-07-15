@@ -71,6 +71,12 @@ describe('nearestVideos: gallery-aware (the #1417 regression fix)', () => {
 	it('one lone video among galleries → just that one, wherever the active card sits', () => {
 		expect(nearestVideos(2, isVideo([7]), 10, 3)).toEqual([7]);
 	});
+
+	it('defensive: an out-of-range activeIndex clamps in (does NOT silently empty the pool)', () => {
+		// past-the-end / negative index → clamp to the nearest in-range card, still pool N videos.
+		expect(nearestVideos(99, allVideos, 6, 3).sort((a, b) => a - b)).toEqual([3, 4, 5]);
+		expect(nearestVideos(-5, allVideos, 6, 3).sort((a, b) => a - b)).toEqual([0, 1, 2]);
+	});
 });
 
 describe('reassignPool (preserve covered bindings, recycle the rest)', () => {

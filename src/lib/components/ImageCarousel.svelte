@@ -15,17 +15,41 @@
 	let {
 		item,
 		active,
-		viewportAR
+		viewportAR,
+		autoAdvance = false,
+		ontap,
+		onadvance
 	}: {
 		item: FeedItem;
-		/** This card is the active (in-viewport) one — gates ±1 adjacent preload. */
+		/** This card is the active (in-viewport) one — gates ±1 adjacent preload + auto-advance. */
 		active: boolean;
 		/** Viewport aspect ratio (w/h), reactive — drives per-frame object-fit on rotate/resize. */
 		viewportAR: number;
+		/** Feed's auto-advance mode — when on, an idle gallery advances the FEED after a dwell. */
+		autoAdvance?: boolean;
+		/** A genuine tap (not a swipe) on the gallery — Feed routes it to onTapGesture so double-
+		 *  tap-to-like + the heart burst work identically to a video (the app's signature gesture).
+		 *  Every video-specific op in that handler no-ops on a gallery (activeVideo() is null). */
+		ontap?: (e?: MouseEvent) => void;
+		/** Advance the FEED to the next item (auto-advance dwell fired) — Feed scrolls on. */
+		onadvance?: () => void;
 	} = $props();
 
 	const frames = $derived(item.media ?? []);
 	let index = $state(0);
+
+	// Auto-advance (opt-in): a gallery has no <video> 'ended' to drive the feed, so without this
+	// the feed DEAD-ENDS on the first photo post when AUTO_ADVANCE is on. An idle dwell advances
+	// the feed; it RESTARTS on every frame change (`index`), so an actively-swiping user is never
+	// yanked away — the feed only moves on after DWELL of no interaction. Active-only; cleared on
+	// deactivate by the effect's own teardown. (Dwell is generous + device-tunable.)
+	const AUTO_ADVANCE_DWELL_MS = 8000;
+	$effect(() => {
+		if (!active || !autoAdvance || frames.length === 0) return;
+		void index; // restart the dwell whenever the frame changes (manual swipe or reset)
+		const t = setTimeout(() => onadvance?.(), AUTO_ADVANCE_DWELL_MS);
+		return () => clearTimeout(t);
+	});
 
 	// Restart at the first frame when the card scrolls away, so returning to it opens on the
 	// cover (mirrors the video path's t=0 fresh-arrival restart) — and clear any in-flight drag
@@ -37,6 +61,7 @@
 			dragPx = 0;
 			dragging = false;
 			axis = 'none';
+			tapCandidate = false;
 		}
 	});
 
@@ -77,41 +102,54 @@
 	let dragging = $state(false); // drives .dragging (transition off while the finger is down)
 	let dragPx = $state(0); // live horizontal offset added to the track transform
 	let axis: 'none' | 'h' | 'v' = 'none';
+	let tapCandidate = false; // pointerdown that hasn't moved enough to be a swipe → a tap (like)
 	let startX = 0;
 	let startY = 0;
 	let lastX = 0;
 	let lastT = 0;
 	let vx = 0; // instantaneous px/ms, for flick detection
 
+	// Gesture tunables (device-tunable per the UI/UX audit): flick lowered to 0.3 px/ms so a quick
+	// short swipe advances (0.4 read sticky on iOS); the axis lock needs a clear horizontal bias
+	// (|dx| > |dy|*1.3 past 8px) so a borderline-diagonal drag falls through to the feed's vertical
+	// scroll instead of being stolen by the carousel.
+	const FLICK_PX_PER_MS = 0.3;
+	const H_BIAS = 1.3;
+
 	function width(): number {
 		return carouselEl?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 1);
 	}
 
 	function onPointerDown(e: PointerEvent) {
-		if (frames.length < 2) return; // nothing to swipe in a 1-frame gallery
+		// Always a tap candidate (even a 1-frame gallery, so double-tap-to-like works there too);
+		// the DRAG path below only arms for a multi-frame gallery.
 		startX = e.clientX;
 		startY = e.clientY;
 		lastX = e.clientX;
 		lastT = e.timeStamp;
 		vx = 0;
 		axis = 'none';
-		dragging = true;
+		dragging = false;
 		dragPx = 0;
+		tapCandidate = true;
 	}
 	function onPointerMove(e: PointerEvent) {
-		if (!dragging) return;
+		if (!tapCandidate && !dragging) return;
 		const dx = e.clientX - startX;
 		const dy = e.clientY - startY;
+		// Any real movement cancels the tap (a tap is press-release with ~no travel).
+		if (Math.abs(dx) > 10 || Math.abs(dy) > 10) tapCandidate = false;
+		if (frames.length < 2) return; // 1-frame gallery: nothing to swipe (tap still handled on up)
 		if (axis === 'none') {
-			// Disambiguate: horizontal-dominant past a 6px deadzone → we own it (capture the
-			// pointer so the drag survives the finger leaving the element); vertical-dominant →
-			// bow out and let the feed's native scroll-snap take the gesture.
-			if (Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy)) {
+			// Claim the gesture only when it's CLEARLY horizontal (h-bias past an 8px deadzone) —
+			// then capture the pointer so the drag survives the finger leaving the element. A
+			// vertical or borderline-diagonal drag bows out → the feed's native scroll-snap takes it.
+			if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * H_BIAS) {
 				axis = 'h';
+				dragging = true;
 				(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
 			} else if (Math.abs(dy) > 6) {
 				axis = 'v';
-				dragging = false;
 				dragPx = 0;
 				return;
 			} else {
@@ -128,19 +166,31 @@
 		const atEdge = (index === 0 && dx > 0) || (index === frames.length - 1 && dx < 0);
 		dragPx = atEdge ? dx * 0.35 : dx;
 	}
-	function endDrag() {
-		if (!dragging) {
+	function onPointerUp(e: PointerEvent) {
+		const wasTap = tapCandidate && axis !== 'h';
+		tapCandidate = false;
+		if (dragging) {
+			dragging = false; // re-enables the transition so the snap animates
+			const moved = dragPx;
 			axis = 'none';
-			return;
+			// Snap: past ~22% of the width, OR a fast flick in the drag's own direction.
+			const far = Math.abs(moved) > width() * 0.22;
+			const flick = Math.abs(vx) > FLICK_PX_PER_MS && Math.sign(vx) === Math.sign(moved);
+			dragPx = 0; // → the transform animates from the dragged offset to the snapped index
+			if ((far || flick) && moved !== 0) go(index + (moved < 0 ? 1 : -1));
+		} else {
+			axis = 'none';
+			dragPx = 0;
 		}
-		dragging = false; // re-enables the transition so the snap animates
-		const moved = dragPx;
+		// A genuine tap → route to Feed's onTapGesture (double-tap-to-like + heart burst). The
+		// PointerEvent is a MouseEvent, so the heart lands at the tap point.
+		if (wasTap) ontap?.(e);
+	}
+	function onPointerCancel() {
+		tapCandidate = false;
+		dragging = false;
+		dragPx = 0;
 		axis = 'none';
-		// Snap: past ~22% of the width, OR a fast flick (>0.4 px/ms) in the drag's own direction.
-		const far = Math.abs(moved) > width() * 0.22;
-		const flick = Math.abs(vx) > 0.4 && Math.sign(vx) === Math.sign(moved);
-		dragPx = 0; // → the transform animates from the dragged offset to the snapped index
-		if ((far || flick) && moved !== 0) go(index + (moved < 0 ? 1 : -1));
 	}
 </script>
 
@@ -158,8 +208,8 @@
 		aria-label={`Photo gallery, ${frames.length} ${frames.length === 1 ? 'image' : 'images'}`}
 		onpointerdown={onPointerDown}
 		onpointermove={onPointerMove}
-		onpointerup={endDrag}
-		onpointercancel={endDrag}
+		onpointerup={onPointerUp}
+		onpointercancel={onPointerCancel}
 	>
 		<div
 			class="track"
@@ -172,7 +222,7 @@
 						<img
 							class={fitClass(i)}
 							src={frame.url}
-							alt=""
+							alt={`Photo ${i + 1} of ${frames.length}`}
 							draggable="false"
 							onload={(e) => onImgLoad(i, e)}
 						/>
@@ -231,6 +281,10 @@
 		display: flex;
 		width: 100%;
 		height: 100%;
+		/* The snap animation. Under prefers-reduced-motion the global app.css blanket zeroes every
+		   transition-duration (!important), so the snap becomes an instant jump there — honored,
+		   just via the global rule, not locally. The finger-follow drag is a live transform (not a
+		   transition), so direct manipulation always tracks 1:1 regardless. */
 		transition: transform 0.3s ease;
 		will-change: transform;
 	}
@@ -312,21 +366,29 @@
 		bottom: calc(env(safe-area-inset-bottom) + 0.75rem);
 		z-index: 3;
 		display: flex;
+		align-items: center;
 		justify-content: center;
 		gap: 0.35rem;
 		pointer-events: none;
+		/* Row-level shadow so the dots stay legible over a bright/busy cover frame (UX audit). */
+		filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
 	}
 
 	.dot {
 		width: 6px;
 		height: 6px;
 		border-radius: 50%;
-		background: rgba(255, 255, 255, 0.4);
-		transition: background 0.2s ease;
+		background: rgba(255, 255, 255, 0.45);
+		transition:
+			background 0.2s ease,
+			transform 0.2s ease;
 	}
 
+	/* Active dot: brighter AND scaled up (transform, so no layout shift) for clear emphasis
+	   beyond opacity alone. */
 	.dot.on {
-		background: rgba(255, 255, 255, 0.95);
+		background: rgba(255, 255, 255, 0.98);
+		transform: scale(1.35);
 	}
 
 	.counter {

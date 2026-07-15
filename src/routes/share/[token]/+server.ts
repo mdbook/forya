@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { config } from '$lib/server/config';
-import { getFeed, safeMediaPath } from '$lib/server/videos';
+import { getFeed, isVideoFile, safeMediaPath } from '$lib/server/videos';
 import { resolveShare } from '$lib/server/share';
 
 // GET /share/<token> — UNAUTH (the hub bypasses forward-auth for `/share/*` ONLY) — a minimal
@@ -85,8 +85,8 @@ function galleryPage(token: string, base: string, frameNames: string[]): string 
 <title>forya — shared gallery</title>
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="forya" />
-<meta property="og:title" content="forya — shared photo gallery" />
-<meta property="og:description" content="A ${n}-photo gallery shared from forya." />
+<meta property="og:title" content="forya — ${n}-photo gallery" />
+<meta property="og:description" content="A ${n}-photo gallery shared from forya — swipe through all ${n}." />
 <meta property="og:url" content="${shareUrl}" />
 <meta property="og:image" content="${coverUrl}" />
 <meta name="twitter:card" content="summary_large_image" />
@@ -107,6 +107,27 @@ ${imgs}
 </html>`;
 }
 
+// A gallery whose frames aren't in the warm manifest yet (cold container, ~1-2s) — a minimal
+// meta-refresh page rather than a broken <video>. No OG tags (a crawler that hits it mid-warmup
+// gets nothing to cache, not a wrong video card); the reload lands the real carousel once warm.
+function retryPage(): string {
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="refresh" content="2" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="referrer" content="no-referrer" />
+<title>forya — loading…</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;color:rgba(255,255,255,0.7);font:600 0.95rem system-ui,sans-serif;}
+  body{display:flex;align-items:center;justify-content:center;}
+</style>
+</head>
+<body>Loading gallery…</body>
+</html>`;
+}
+
 export const GET: RequestHandler = async (event) => {
 	const { params } = event;
 	const resolved = await resolveShare(params.token, config.dataDir);
@@ -120,17 +141,24 @@ export const GET: RequestHandler = async (event) => {
 	const base = (config.shareBase || event.url.origin).replace(/\/+$/, '');
 
 	// A gallery token resolves to the bare `<id>` — look it up in the warm manifest and render the
-	// full-carousel page; anything else (a video/single file) renders the <video> player. The
-	// lookup is a zero-fs in-memory read (getFeed never scans on the request path).
+	// full-carousel page; a video/single FILE renders the <video> player. The lookup is a zero-fs
+	// in-memory read (getFeed never scans on the request path, and it kicks a background
+	// revalidate). A bare id NOT in the manifest = a gallery whose frames aren't warm yet (cold
+	// container ~1-2s) or a since-deleted gallery — render a meta-refresh RETRY page, NEVER the
+	// <video> page (which would show a broken player + wrong og:video for a photo post; code-audit).
 	const item = getFeed().items.find((i) => i.name === resolved.name);
-	const html =
-		item?.media && item.media.length
-			? galleryPage(
-					params.token,
-					base,
-					item.media.map((m) => m.name)
-				)
-			: page(params.token, base);
+	let html: string;
+	if (item?.media && item.media.length) {
+		html = galleryPage(
+			params.token,
+			base,
+			item.media.map((m) => m.name)
+		);
+	} else if (isVideoFile(resolved.name)) {
+		html = page(params.token, base);
+	} else {
+		html = retryPage();
+	}
 
 	return new Response(html, {
 		headers: {

@@ -1369,8 +1369,18 @@
 					{#if item.media}
 						<!-- Photo-post gallery (Contract A): a swipeable ImageCarousel, NOT the pooled
 						     <video> shell. Registers no slot (no onslot) + syncPool filters it out of the
-						     pool target set → zero video-pool bleed (AC-4). Rail like/hide/share still act. -->
-						<ImageCarousel {item} active={i === activeIndex} {viewportAR} />
+						     pool target set → zero video-pool bleed (AC-4). `ontap` routes a genuine tap to
+						     the SAME onTapGesture as a video (double-tap-to-like + heart burst — every
+						     video-specific op no-ops on a gallery). Auto-advance dwells then scrolls on
+						     (a gallery has no <video> 'ended' to drive the feed). -->
+						<ImageCarousel
+							{item}
+							active={i === activeIndex}
+							{viewportAR}
+							{autoAdvance}
+							ontap={onTapGesture}
+							onadvance={() => scrollTo(activeIndex + 1)}
+						/>
 					{:else}
 						<VideoCard
 							{item}
