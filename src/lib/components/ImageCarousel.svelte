@@ -6,9 +6,11 @@
 	// (no `onslot`), and never touches the cure machine — so a gallery interleaved between
 	// videos consumes no decoder and can't perturb `activePaused`/the pool blessing (AC-4).
 	//
-	// Vertical scroll must still page the feed (100dvh scroll-snap), so the swipe surface is
-	// `touch-action: pan-y`: the browser owns vertical panning (feed scroll) natively and we
-	// only claim HORIZONTAL drags to advance frames. No feed-scroll hijack.
+	// Vertical scroll must still page the feed (100dvh scroll-snap), so the swipe surface uses
+	// `touch-action: manipulation` (like VideoCard's tap target): the browser keeps VERTICAL pan
+	// (feed scroll) — there's no horizontal-scroll ancestor so our JS finger-drag owns horizontal —
+	// AND double-tap-to-zoom is disabled (the pan-y version let iOS's zoom recognizer break
+	// double-tap-spam + cancel mid-swipe, #1442). No feed-scroll hijack.
 	import { pickFit } from '$lib/fit';
 	import type { FeedItem } from '$lib/types';
 
@@ -56,10 +58,14 @@
 	// state so a card that scrolls away mid-swipe doesn't return mid-drag. Only writes local
 	// state; reads only `active` → no self-loop.
 	$effect(() => {
-		if (!active) {
+		// Reset to the cover + clear stale gesture state when the card GENUINELY leaves — but NOT
+		// while a drag is in flight (`dragging`), so a transient IntersectionObserver active-flip (a
+		// micro vertical wobble during a horizontal swipe) can't abort the drag mid-gesture
+		// (#1442.1). On a real scroll-away the finger lifts → settleDrag clears `dragging` → this
+		// then resets on the next run.
+		if (!active && !dragging) {
 			index = 0;
 			dragPx = 0;
-			dragging = false;
 			axis = 'none';
 			tapCandidate = false;
 		}
@@ -94,10 +100,10 @@
 
 	// Interactive finger-follow drag (TikTok-style): the track tracks the finger in REAL TIME the
 	// instant a horizontal swipe begins (not threshold-then-snap), rubber-bands at the ends, and
-	// snaps on release by distance OR flick velocity. Pointer events work mouse + touch; with
-	// touch-action:pan-y the browser owns VERTICAL panning (feed scroll) — we claim a gesture as
-	// horizontal only once it's clearly h-dominant (small deadzone to disambiguate from a scroll),
-	// and only THEN capture the pointer, so a vertical drag is never stolen from the feed.
+	// snaps on release by distance OR flick velocity. Pointer events work mouse + touch; the browser
+	// keeps VERTICAL panning (feed scroll) — we claim a gesture as horizontal only once it's clearly
+	// h-dominant (small deadzone to disambiguate from a scroll), and only THEN capture the pointer,
+	// so a vertical drag is never stolen from the feed.
 	let carouselEl = $state<HTMLElement>();
 	let dragging = $state(false); // drives .dragging (transition off while the finger is down)
 	let dragPx = $state(0); // live horizontal offset added to the track transform
@@ -166,40 +172,45 @@
 		const atEdge = (index === 0 && dx > 0) || (index === frames.length - 1 && dx < 0);
 		dragPx = atEdge ? dx * 0.35 : dx;
 	}
+	// Settle an in-flight drag (shared by pointerup + pointercancel): COMMIT the swipe if it moved
+	// far enough / fast enough, else settle back to the current frame. Committing on CANCEL (not
+	// hard-reverting) is the #1442.1 robustness fix — a spurious iOS cancel mid-h-drag (zoom
+	// recognizer, a scroll-steal race) shouldn't yank a real swipe back to where it started.
+	function settleDrag() {
+		if (!dragging) {
+			axis = 'none';
+			dragPx = 0;
+			return;
+		}
+		dragging = false; // re-enables the transition so the snap animates
+		const moved = dragPx;
+		axis = 'none';
+		// Snap: past ~22% of the width, OR a fast flick in the drag's own direction.
+		const far = Math.abs(moved) > width() * 0.22;
+		const flick = Math.abs(vx) > FLICK_PX_PER_MS && Math.sign(vx) === Math.sign(moved);
+		dragPx = 0; // → the transform animates from the dragged offset to the snapped index
+		if ((far || flick) && moved !== 0) go(index + (moved < 0 ? 1 : -1));
+	}
 	function onPointerUp(e: PointerEvent) {
 		const wasTap = tapCandidate && axis !== 'h';
 		tapCandidate = false;
-		if (dragging) {
-			dragging = false; // re-enables the transition so the snap animates
-			const moved = dragPx;
-			axis = 'none';
-			// Snap: past ~22% of the width, OR a fast flick in the drag's own direction.
-			const far = Math.abs(moved) > width() * 0.22;
-			const flick = Math.abs(vx) > FLICK_PX_PER_MS && Math.sign(vx) === Math.sign(moved);
-			dragPx = 0; // → the transform animates from the dragged offset to the snapped index
-			if ((far || flick) && moved !== 0) go(index + (moved < 0 ? 1 : -1));
-		} else {
-			axis = 'none';
-			dragPx = 0;
-		}
+		settleDrag();
 		// A genuine tap → route to Feed's onTapGesture (double-tap-to-like + heart burst). The
 		// PointerEvent is a MouseEvent, so the heart lands at the tap point.
 		if (wasTap) ontap?.(e);
 	}
 	function onPointerCancel() {
 		tapCandidate = false;
-		dragging = false;
-		dragPx = 0;
-		axis = 'none';
+		settleDrag();
 	}
 </script>
 
 <div class="media">
 	<!-- Carousel = a labeled group (APG pattern); real prev/next <button>s below carry the
 	     accessible click + keyboard nav. The swipe surface owns horizontal finger-follow DRAGS via
-	     POINTER events only (no keyboard handler here → no a11y-rule trip); touch-action:pan-y
-	     leaves vertical to the feed's scroll-snap. The drag is a touch/mouse enhancement over the
-	     SAME go() the buttons drive; keyboard/AT users navigate with the buttons. -->
+	     POINTER events only (no keyboard handler here → no a11y-rule trip); touch-action:manipulation
+	     leaves vertical to the feed's scroll-snap (+ kills double-tap-zoom). The drag + tap are a
+	     touch/mouse enhancement over the SAME go()/ontap the buttons+rail drive. -->
 	<div
 		class="carousel"
 		bind:this={carouselEl}
@@ -273,8 +284,12 @@
 	.carousel {
 		position: absolute;
 		inset: 0;
-		/* Vertical panning → feed scroll (native); we claim only horizontal drags. */
-		touch-action: pan-y;
+		/* `manipulation` (NOT pan-y) — the same value VideoCard's tap target uses. It permits the
+		   feed's VERTICAL pan (there's no horizontal-scroll ancestor, so our JS finger-drag still
+		   owns horizontal) AND — the fix — DISABLES iOS double-tap-to-zoom. Under pan-y the zoom
+		   recognizer intercepted rapid taps: it broke double-tap-SPAM after the first like (#1442.2)
+		   and could pointercancel an in-progress swipe, snapping it back mid-drag (#1442.1). */
+		touch-action: manipulation;
 	}
 
 	.track {

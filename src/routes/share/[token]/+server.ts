@@ -92,9 +92,11 @@ function galleryPage(token: string, base: string, frameNames: string[]): string 
 <meta name="twitter:card" content="summary_large_image" />
 <style>
   html,body{margin:0;height:100%;background:#000;}
-  .rail{display:flex;height:100dvh;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
+  .rail{display:flex;height:100dvh;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none;scroll-padding-inline:${n > 1 ? '7vw' : '0'};}
   .rail::-webkit-scrollbar{display:none;}
-  .rail img{flex:0 0 100%;width:100%;height:100dvh;object-fit:contain;scroll-snap-align:center;background:#000;user-select:none;-webkit-user-select:none;}
+  /* A MULTI-image gallery sizes each frame to 86vw so the next/prev PEEK at the edges — a clear
+     JS-free "there's more, swipe" signal (a single-image gallery stays full-bleed). */
+  .rail img{flex:0 0 ${n > 1 ? '86vw' : '100%'};width:${n > 1 ? '86vw' : '100%'};height:100dvh;object-fit:contain;scroll-snap-align:center;background:#000;user-select:none;-webkit-user-select:none;}
   .badge{position:fixed;top:calc(env(safe-area-inset-top) + 0.6rem);right:calc(env(safe-area-inset-right) + 0.6rem);padding:0.2rem 0.6rem;color:#fff;font:600 0.8rem system-ui,sans-serif;background:rgba(0,0,0,0.5);border-radius:999px;backdrop-filter:blur(6px);pointer-events:none;}
 </style>
 </head>
