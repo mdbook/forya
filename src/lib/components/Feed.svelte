@@ -43,7 +43,7 @@
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
 	import { pickFit } from '$lib/fit';
 	import { isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
-	import { coverage, reassignPool } from '$lib/pool';
+	import { nearestVideos, reassignPool } from '$lib/pool';
 
 	let {
 		items,
@@ -411,22 +411,18 @@
 		if (!pool.length) return;
 		const totalCards = visible.length;
 		if (totalCards === 0) return;
-		// Coverage is positional (an index window); translate to clip IDENTITY at THIS boundary
-		// so the pool keeps/recycles by NAME — a hide/undo re-index of `visible` then can't
-		// strand a kept clip's slot under a stale index. coverage() returns in-range indices, so
-		// visible[i] is always defined here.
-		const targetIdx = coverage(activeIndex, POOL_SIZE, totalCards);
-		// Galleries (photo posts) are NOT pooled — they own no <video>, register no slot, and
-		// render via ImageCarousel. Exclude them from the pool's target set so an image is never
-		// assigned as a <video>.src and a gallery consumes no decoder. A gallery in the coverage
-		// window just yields fewer video names → reassignPool frees the extra slots; when a
-		// gallery is ACTIVE, its name isn't in slotToName so activeSlot()=-1 and driveActive
-		// early-returns after keeping the video neighbours warm — `activePaused` untouched (AC-4
-		// no-pool-bleed). This is the ONLY change to the pool machine; the video path is intact.
-		const targetNames = targetIdx
-			.map((i) => visible[i])
-			.filter((it) => !it.media)
-			.map((it) => it.name);
+		// Galleries (photo posts) are NEVER pooled — they own no <video>, register no slot, and
+		// render via ImageCarousel. So the pool covers the nearest POOL_SIZE *videos* to the
+		// active card, scanning OUTWARD past galleries (nearestVideos) — NOT a positional ±window
+		// filtered for galleries (round-1's bug: a gallery-heavy window came back empty → the pool
+		// tore down every nearby video's decoder → the next video cold-started blank, the #1417
+		// regression). Keeping the closest videos warm regardless of interleaved galleries restores
+		// the pure-video warm-neighbour guarantee. Identity by NAME at this boundary so a hide/undo
+		// re-index can't strand a kept slot. An ACTIVE gallery isn't a video → not in targetNames →
+		// activeSlot()=-1 → driveActive early-returns (no pool bleed, `activePaused` untouched).
+		// On a pure-video feed nearestVideos == the old centred window, so the video path is intact.
+		const targetIdx = nearestVideos(activeIndex, (i) => !visible[i].media, totalCards, POOL_SIZE);
+		const targetNames = targetIdx.map((i) => visible[i].name);
 		const next = reassignPool(slotToName, targetNames, POOL_SIZE);
 		// Cancel prewarm fetches for clips no longer in the new coverage window (#5d).
 		const wantedUrls: string[] = [];
@@ -563,10 +559,12 @@
 	 *  (AbortError → done) from an activation lapse (→ clipboard) and degrade gracefully. */
 	async function share(item: FeedItem | undefined) {
 		if (!item) return;
-		// A gallery's `name` is the bare post id (not a servable file), so share its COVER FRAME
-		// (a real file the /share/<token>/media route can serve) — item.url is already that frame.
-		// Full carousel-share is a follow-up; v1 shares the cover image. Video: shareName = name.
-		const shareName = item.media?.[0]?.name ?? item.name;
+		// Mint on the item's OWN name: a video's filename, or a gallery's bare `<id>`. The
+		// `/share/<token>` page is gallery-aware — a bare id renders the whole swipeable carousel
+		// (full-carousel share, AC-5); a video renders the player. `safeMediaPath` accepts a bare
+		// id (no separators). The LAN fallback (no shareBase) shares item.url — the cover frame for
+		// a gallery — since off-LAN carousel needs the token/share page.
+		const shareName = item.name;
 		let url = new URL(item.url, location.origin).href; // pre-0.8.4 fallback: direct LAN URL
 		if (settings.shareBase) {
 			try {

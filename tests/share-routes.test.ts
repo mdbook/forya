@@ -45,4 +45,16 @@ describe('share routes — feature OFF (no DATA_DIR) → uniform 404, store unto
 			status: 404
 		});
 	});
+
+	it('bytes with a malicious ?f=<frame> still 404 when disabled (the gallery-frame param is no bypass)', async () => {
+		const mod = await import('../src/routes/share/[token]/media/+server');
+		const event = {
+			params: { token: 'any-token' },
+			url: new URL('http://localhost/?f=' + encodeURIComponent('../../etc/passwd')),
+			request: new Request('http://localhost/')
+		} as unknown as Parameters<RequestHandler>[0];
+		// resolveShare is null (feature off) → 404 BEFORE the gallery/frame branch → `?f` never
+		// reaches serve(). (Enabled, `?f` is allowlisted to the token's OWN gallery frames.)
+		await expect((mod.GET as RequestHandler)(event)).rejects.toMatchObject({ status: 404 });
+	});
 });

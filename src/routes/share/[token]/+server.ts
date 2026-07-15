@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { config } from '$lib/server/config';
-import { safeMediaPath } from '$lib/server/videos';
+import { getFeed, safeMediaPath } from '$lib/server/videos';
 import { resolveShare } from '$lib/server/share';
 
 // GET /share/<token> — UNAUTH (the hub bypasses forward-auth for `/share/*` ONLY) — a minimal
@@ -61,6 +61,52 @@ function page(token: string, base: string): string {
 </html>`;
 }
 
+// Image-gallery share page (full-carousel, AC-5). A JS-FREE horizontal CSS scroll-snap rail of the
+// gallery's frames — the recipient swipes through ALL images, no player, no cure machine, nothing
+// to autoplay (bulletproof on the unauth surface, same ethos as the <video> page). Each frame is
+// served token-scoped via `?f=<frame>` (validated against this gallery's own media[] in the media
+// route). og:image = the cover frame (no `?f` → cover), so iOS renders a rich link CARD.
+function galleryPage(token: string, base: string, frameNames: string[]): string {
+	const shareUrl = enc(`${base}/share/${token}`);
+	const coverUrl = enc(`${base}/share/${token}/media`); // no ?f → cover frame, clean OG image
+	const n = frameNames.length;
+	const imgs = frameNames
+		.map((name, i) => {
+			const src = enc(`/share/${token}/media?f=${encodeURIComponent(name)}`);
+			return `<img src="${src}" alt="Photo ${i + 1} of ${n}" loading="${i === 0 ? 'eager' : 'lazy'}" draggable="false" />`;
+		})
+		.join('\n');
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="referrer" content="no-referrer" />
+<title>forya — shared gallery</title>
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="forya" />
+<meta property="og:title" content="forya — shared photo gallery" />
+<meta property="og:description" content="A ${n}-photo gallery shared from forya." />
+<meta property="og:url" content="${shareUrl}" />
+<meta property="og:image" content="${coverUrl}" />
+<meta name="twitter:card" content="summary_large_image" />
+<style>
+  html,body{margin:0;height:100%;background:#000;}
+  .rail{display:flex;height:100dvh;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
+  .rail::-webkit-scrollbar{display:none;}
+  .rail img{flex:0 0 100%;width:100%;height:100dvh;object-fit:contain;scroll-snap-align:center;background:#000;user-select:none;-webkit-user-select:none;}
+  .badge{position:fixed;top:calc(env(safe-area-inset-top) + 0.6rem);right:calc(env(safe-area-inset-right) + 0.6rem);padding:0.2rem 0.6rem;color:#fff;font:600 0.8rem system-ui,sans-serif;background:rgba(0,0,0,0.5);border-radius:999px;backdrop-filter:blur(6px);pointer-events:none;}
+</style>
+</head>
+<body>
+<div class="rail">
+${imgs}
+</div>
+<div class="badge" aria-hidden="true">\u{1F4F7} ${n}</div>
+</body>
+</html>`;
+}
+
 export const GET: RequestHandler = async (event) => {
 	const { params } = event;
 	const resolved = await resolveShare(params.token, config.dataDir);
@@ -73,7 +119,20 @@ export const GET: RequestHandler = async (event) => {
 	// canonical public origin; fall back to the request origin when it is unset (dev / no base).
 	const base = (config.shareBase || event.url.origin).replace(/\/+$/, '');
 
-	return new Response(page(params.token, base), {
+	// A gallery token resolves to the bare `<id>` — look it up in the warm manifest and render the
+	// full-carousel page; anything else (a video/single file) renders the <video> player. The
+	// lookup is a zero-fs in-memory read (getFeed never scans on the request path).
+	const item = getFeed().items.find((i) => i.name === resolved.name);
+	const html =
+		item?.media && item.media.length
+			? galleryPage(
+					params.token,
+					base,
+					item.media.map((m) => m.name)
+				)
+			: page(params.token, base);
+
+	return new Response(html, {
 		headers: {
 			'content-type': 'text/html; charset=utf-8',
 			'referrer-policy': 'no-referrer',

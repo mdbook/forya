@@ -28,10 +28,16 @@
 	let index = $state(0);
 
 	// Restart at the first frame when the card scrolls away, so returning to it opens on the
-	// cover (mirrors the video path's t=0 fresh-arrival restart). Only writes `index`; reads
-	// only `active` → no self-loop.
+	// cover (mirrors the video path's t=0 fresh-arrival restart) — and clear any in-flight drag
+	// state so a card that scrolls away mid-swipe doesn't return mid-drag. Only writes local
+	// state; reads only `active` → no self-loop.
 	$effect(() => {
-		if (!active) index = 0;
+		if (!active) {
+			index = 0;
+			dragPx = 0;
+			dragging = false;
+			axis = 'none';
+		}
 	});
 
 	function go(next: number) {
@@ -61,67 +67,105 @@
 		return nd && pickFit(nd.w, nd.h, viewportAR) === 'contain' ? 'contain' : '';
 	}
 
-	// Horizontal-swipe detection via pointer events (works mouse + touch). With touch-action:
-	// pan-y the browser never consumes horizontal movement, so these fire for a horizontal drag
-	// while a vertical drag is left to the feed's native scroll-snap. A drag past THRESHOLD px
-	// (or a fast flick) advances one frame; a short drag is a tap → advance forward (a light
-	// TikTok-style tap-through), left third taps back.
-	const THRESHOLD = 40;
-	let downX = 0;
-	let downY = 0;
-	let dragging = false;
-	let horizontal = false;
+	// Interactive finger-follow drag (TikTok-style): the track tracks the finger in REAL TIME the
+	// instant a horizontal swipe begins (not threshold-then-snap), rubber-bands at the ends, and
+	// snaps on release by distance OR flick velocity. Pointer events work mouse + touch; with
+	// touch-action:pan-y the browser owns VERTICAL panning (feed scroll) — we claim a gesture as
+	// horizontal only once it's clearly h-dominant (small deadzone to disambiguate from a scroll),
+	// and only THEN capture the pointer, so a vertical drag is never stolen from the feed.
+	let carouselEl = $state<HTMLElement>();
+	let dragging = $state(false); // drives .dragging (transition off while the finger is down)
+	let dragPx = $state(0); // live horizontal offset added to the track transform
+	let axis: 'none' | 'h' | 'v' = 'none';
+	let startX = 0;
+	let startY = 0;
+	let lastX = 0;
+	let lastT = 0;
+	let vx = 0; // instantaneous px/ms, for flick detection
+
+	function width(): number {
+		return carouselEl?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 1);
+	}
 
 	function onPointerDown(e: PointerEvent) {
-		downX = e.clientX;
-		downY = e.clientY;
+		if (frames.length < 2) return; // nothing to swipe in a 1-frame gallery
+		startX = e.clientX;
+		startY = e.clientY;
+		lastX = e.clientX;
+		lastT = e.timeStamp;
+		vx = 0;
+		axis = 'none';
 		dragging = true;
-		horizontal = false;
+		dragPx = 0;
 	}
 	function onPointerMove(e: PointerEvent) {
 		if (!dragging) return;
-		const dx = e.clientX - downX;
-		const dy = e.clientY - downY;
-		// Once a gesture is clearly horizontal, mark it so pointerup treats it as a swipe (and
-		// not a tap). Vertical-dominant gestures are left alone → feed scroll.
-		if (!horizontal && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) horizontal = true;
+		const dx = e.clientX - startX;
+		const dy = e.clientY - startY;
+		if (axis === 'none') {
+			// Disambiguate: horizontal-dominant past a 6px deadzone → we own it (capture the
+			// pointer so the drag survives the finger leaving the element); vertical-dominant →
+			// bow out and let the feed's native scroll-snap take the gesture.
+			if (Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy)) {
+				axis = 'h';
+				(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+			} else if (Math.abs(dy) > 6) {
+				axis = 'v';
+				dragging = false;
+				dragPx = 0;
+				return;
+			} else {
+				return;
+			}
+		}
+		if (axis !== 'h') return;
+		const dt = e.timeStamp - lastT;
+		if (dt > 0) vx = (e.clientX - lastX) / dt;
+		lastX = e.clientX;
+		lastT = e.timeStamp;
+		// Rubber-band: dragging before the first frame or past the last resists (0.35×) so the
+		// gallery feels bounded without a hard wall.
+		const atEdge = (index === 0 && dx > 0) || (index === frames.length - 1 && dx < 0);
+		dragPx = atEdge ? dx * 0.35 : dx;
 	}
-	function onPointerUp(e: PointerEvent) {
-		if (!dragging) return;
-		dragging = false;
-		const dx = e.clientX - downX;
-		const dy = e.clientY - downY;
-		if (horizontal || (Math.abs(dx) > THRESHOLD && Math.abs(dx) > Math.abs(dy))) {
-			go(index + (dx < 0 ? 1 : -1)); // swipe left → next, right → prev
+	function endDrag() {
+		if (!dragging) {
+			axis = 'none';
 			return;
 		}
-		// Not a swipe → a tap. Left third = back, elsewhere = forward (desktop/click affordance).
-		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		const frac = r.width ? (e.clientX - r.left) / r.width : 1;
-		go(index + (frac < 0.33 ? -1 : 1));
-	}
-	function onPointerCancel() {
-		dragging = false;
+		dragging = false; // re-enables the transition so the snap animates
+		const moved = dragPx;
+		axis = 'none';
+		// Snap: past ~22% of the width, OR a fast flick (>0.4 px/ms) in the drag's own direction.
+		const far = Math.abs(moved) > width() * 0.22;
+		const flick = Math.abs(vx) > 0.4 && Math.sign(vx) === Math.sign(moved);
+		dragPx = 0; // → the transform animates from the dragged offset to the snapped index
+		if ((far || flick) && moved !== 0) go(index + (moved < 0 ? 1 : -1));
 	}
 </script>
 
 <div class="media">
 	<!-- Carousel = a labeled group (APG pattern); real prev/next <button>s below carry the
-	     accessible click + keyboard nav. The swipe surface owns horizontal DRAGS (touch primary
-	     on iOS) + tap-to-step via POINTER events only (no keyboard handler here → no a11y-rule
-	     trip); touch-action:pan-y leaves vertical to the feed's scroll-snap. Pointer swipe is a
-	     touch/mouse enhancement over the SAME go() the buttons drive; keyboard/AT users use them. -->
+	     accessible click + keyboard nav. The swipe surface owns horizontal finger-follow DRAGS via
+	     POINTER events only (no keyboard handler here → no a11y-rule trip); touch-action:pan-y
+	     leaves vertical to the feed's scroll-snap. The drag is a touch/mouse enhancement over the
+	     SAME go() the buttons drive; keyboard/AT users navigate with the buttons. -->
 	<div
 		class="carousel"
+		bind:this={carouselEl}
 		role="group"
 		aria-roledescription="carousel"
 		aria-label={`Photo gallery, ${frames.length} ${frames.length === 1 ? 'image' : 'images'}`}
 		onpointerdown={onPointerDown}
 		onpointermove={onPointerMove}
-		onpointerup={onPointerUp}
-		onpointercancel={onPointerCancel}
+		onpointerup={endDrag}
+		onpointercancel={endDrag}
 	>
-		<div class="track" style:transform={`translateX(${-index * 100}%)`}>
+		<div
+			class="track"
+			class:dragging
+			style:transform={`translateX(calc(${-index * 100}% + ${dragPx}px))`}
+		>
 			{#each frames as frame, i (frame.name)}
 				<div class="frame">
 					{#if shouldLoad(i)}
@@ -189,6 +233,12 @@
 		height: 100%;
 		transition: transform 0.3s ease;
 		will-change: transform;
+	}
+
+	/* While the finger is down the track follows in real time — kill the transition so it tracks
+	   1:1; on release .dragging drops and the snap animates over the restored 0.3s. */
+	.track.dragging {
+		transition: none;
 	}
 
 	.frame {
