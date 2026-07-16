@@ -9,8 +9,21 @@
 // (16:9 → ~3.9, 9:16-on-desktop → ~0.32) letterbox.
 
 /** Default ratio threshold: how far the clip/viewport aspect ratio may diverge
- *  (in either direction) before we letterbox instead of fill. */
+ *  (in either direction) before we letterbox instead of fill. Tuned for VIDEO —
+ *  TikTok clips are near-always 9:16, so at ~1.8 a normal clip fills and only a
+ *  genuinely off-aspect one letterboxes. At the threshold, `cover` crops up to
+ *  ~1-1/1.8 ≈ 44% of the long edge. */
 export const MAX_COVER_RATIO = 1.8;
+
+/** Tighter threshold for GALLERY photo frames (round-3 crop fix, #1526). Photo
+ *  posts carry varied aspects (3:4, 4:5, square, landscape) — not the uniform 9:16
+ *  of videos — so the video default over-crops them ("cuts out a lot of the image"):
+ *  a 4:5 photo on a tall phone is r≈1.74 → still `cover` at 1.8 → ~42% cropped. At
+ *  1.4 it letterboxes instead, capping cover-crop at ~1-1/1.4 ≈ 28% (users would
+ *  rather see the whole photo than lose a third of it — the TikTok/IG photo default).
+ *  Applied ONLY by ImageCarousel via pickFit's maxCoverRatio param; the video pool
+ *  keeps MAX_COVER_RATIO untouched. Device-tunable. */
+export const GALLERY_MAX_COVER_RATIO = 1.4;
 
 export function pickFit(
 	videoWidth: number,

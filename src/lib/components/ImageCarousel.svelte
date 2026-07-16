@@ -11,7 +11,7 @@
 	// (feed scroll) — there's no horizontal-scroll ancestor so our JS finger-drag owns horizontal —
 	// AND double-tap-to-zoom is disabled (the pan-y version let iOS's zoom recognizer break
 	// double-tap-spam + cancel mid-swipe, #1442). No feed-scroll hijack.
-	import { pickFit } from '$lib/fit';
+	import { pickFit, GALLERY_MAX_COVER_RATIO } from '$lib/fit';
 	import type { FeedItem } from '$lib/types';
 	import Music from '@lucide/svelte/icons/music';
 
@@ -106,7 +106,11 @@
 	}
 	function fitClass(i: number): '' | 'contain' {
 		const nd = natural[i];
-		return nd && pickFit(nd.w, nd.h, viewportAR) === 'contain' ? 'contain' : '';
+		// Round-3 crop fix (#1526): photos use the tighter GALLERY threshold so wide/square frames
+		// letterbox (show whole) instead of cover-cropping ~40% off. Videos keep the 1.8 default.
+		return nd && pickFit(nd.w, nd.h, viewportAR, GALLERY_MAX_COVER_RATIO) === 'contain'
+			? 'contain'
+			: '';
 	}
 
 	// Interactive finger-follow drag (TikTok-style): the track tracks the finger in REAL TIME the
