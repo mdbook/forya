@@ -48,6 +48,14 @@ export interface FeedItem {
 	// fallback). A gallery is rendered by ImageCarousel and NEVER touches the <video> pool.
 	/** Ordered gallery frames; present ⇒ photo-post gallery, absent ⇒ video. */
 	media?: MediaFrame[];
+	// Gallery soundtrack (TikTok photo-post audio, round-3). ADDITIVE — present ONLY on a gallery
+	// item that has a bare `<id>.{m4a,mp3}` soundtrack file beside its `<id>_NN.*` frames. That
+	// presence-beside-frames IS the "gallery-audio IFF frames exist" disambiguator: a stray audio
+	// file whose id has no frames never becomes a gallery and never gets this field (so it's never
+	// served). Absent on videos and on audioless galleries. The client plays it looping +
+	// mute-respecting via a single blessed <audio> channel (Feed.svelte), never the <video> pool.
+	/** Gallery soundtrack; present ⇒ this gallery has audio (only ever set on a `media` item). */
+	audio?: MediaFrame;
 }
 
 /** The `/api/feed` response shape. */

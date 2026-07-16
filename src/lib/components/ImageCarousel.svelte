@@ -13,12 +13,14 @@
 	// double-tap-spam + cancel mid-swipe, #1442). No feed-scroll hijack.
 	import { pickFit } from '$lib/fit';
 	import type { FeedItem } from '$lib/types';
+	import Music from '@lucide/svelte/icons/music';
 
 	let {
 		item,
 		active,
 		viewportAR,
 		autoAdvance = false,
+		muted = true,
 		ontap,
 		onadvance
 	}: {
@@ -29,6 +31,10 @@
 		viewportAR: number;
 		/** Feed's auto-advance mode — when on, an idle gallery advances the FEED after a dwell. */
 		autoAdvance?: boolean;
+		/** Feed mute pref (round-3). Only drives the soundtrack CHIP's audible/emphasis state — the
+		 *  actual audio is the single blessed <audio> channel Feed owns; this component stays inert
+		 *  to playback. `!muted` on an active gallery ⟺ audible (muted only ever clears via bless). */
+		muted?: boolean;
 		/** A genuine tap (not a swipe) on the gallery — Feed routes it to onTapGesture so double-
 		 *  tap-to-like + the heart burst work identically to a video (the app's signature gesture).
 		 *  Every video-specific op in that handler no-ops on a gallery (activeVideo() is null). */
@@ -38,6 +44,11 @@
 	} = $props();
 
 	const frames = $derived(item.media ?? []);
+	// This gallery carries a soundtrack (round-3) → show the ♪ chip so the feature is DISCOVERABLE
+	// (a photo post doesn't read as "has sound" like a video does) and the silent-until-first-tap
+	// ceiling reads as "not yet unmuted" rather than "broken" (ui/ux audit S1/S2). Presentational
+	// only — the audio itself is Feed's blessed <audio> channel; this component never plays anything.
+	const hasAudio = $derived(!!item.audio);
 	let index = $state(0);
 
 	// Auto-advance (opt-in): a gallery has no <video> 'ended' to drive the feed, so without this
@@ -243,6 +254,17 @@
 		</div>
 	</div>
 
+	{#if hasAudio}
+		<!-- Soundtrack indicator (round-3): signals this photo post HAS music (invisible otherwise —
+		     a carousel doesn't read as "has sound"). Dim = has a soundtrack; bright = currently
+		     audible (active card + sound on). Decorative + pointer-events:none — the rail mute button
+		     is the control; bottom-left keeps it clear of the counter (top-right), dots (bottom-
+		     center), rail (right) and the /liked back-chip (top-left). -->
+		<div class="audio-chip" class:on={active && !muted} aria-hidden="true">
+			<Music size={14} aria-hidden="true" />
+		</div>
+	{/if}
+
 	{#if frames.length > 1}
 		<!-- Accessible discrete nav (click + keyboard): edge arrow chips, disabled at the ends.
 		     Kept small so a mid-screen swipe isn't intercepted; they're the keyboard/AT path. -->
@@ -404,6 +426,32 @@
 	.dot.on {
 		background: rgba(255, 255, 255, 0.98);
 		transform: scale(1.35);
+	}
+
+	/* Soundtrack chip (round-3): a small frosted ♪ pill, bottom-left. Dim by default ("this post
+	   has music"); .on (active + sound on) brightens it to full ("playing now"). Matches the
+	   counter/back-chip chrome. */
+	.audio-chip {
+		position: absolute;
+		left: calc(env(safe-area-inset-left) + 0.75rem);
+		bottom: calc(env(safe-area-inset-bottom) + 0.75rem);
+		z-index: 3;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.9rem;
+		height: 1.9rem;
+		color: #fff;
+		background: rgba(0, 0, 0, 0.45);
+		border-radius: 999px;
+		backdrop-filter: blur(8px);
+		pointer-events: none;
+		opacity: 0.5;
+		transition: opacity 0.2s ease;
+	}
+
+	.audio-chip.on {
+		opacity: 1;
 	}
 
 	.counter {
