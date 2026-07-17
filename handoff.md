@@ -195,6 +195,50 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.11.0 — gallery audio (+ crop refinement)
+
+Round-3 of image galleries: the forya-side playback of a photo post's soundtrack. The load-bearing
+constraint is the same one the video pool fought for weeks — do NOT let a second audio-rendering
+element re-arbitrate the iOS Bluetooth (A2DP) route beside the pool.
+
+- **The audio channel (Feed.svelte).** ONE persistent `<audio>` (`galleryAudio`), created in
+  onMount (muted + loop), NOT a pool element — audio-only, zero decoder, never parked into a card,
+  so a gallery still consumes no pool slot (`activeSlot() = -1`). It applies the pool's per-element
+  grant model: once it has a src it plays **continuously muted** and is **never paused while it
+  holds a track** — a pause drops the iOS route grant (the exact lesson behind the pool never
+  pausing neighbours). Audible only when `activeGalleryHasAudio() && blessed && !muted`, via the
+  single `assertGalleryAudio()` gate that every path (bless, toggleMute, onTouchEnd, drive,
+  foreground) funnels through.
+- **Exactly-one-audible (the A2DP invariant).** On a gallery frame `activeSlot() = -1`, so
+  `driveActive` mutes EVERY pool video before its early-return, and `syncGalleryAudio()` runs AFTER
+  `driveActive` in `syncPool` — so the channel's unmute can never overlap an audible pool video.
+  gallery→video mutes the channel synchronously; the video unmutes async on its own `playing`
+  event → silence-first either way. The two gates (`assertActiveAudio` for the pool,
+  `assertGalleryAudio` for the channel) can't both yield audible because their predicates are
+  mutually exclusive (a card is a video XOR a gallery).
+- **Unmute deferred to the channel's `playing` event** (`onGalleryAudioPlaying`), mirroring the
+  pool's `onActivePlaying`: we never unmute a just-src-swapped, not-yet-confirmed-playing element
+  (`.paused` flips false synchronously on `play()`, so it is NOT a confirmed-playing signal — the
+  iOS-refused path). `tapActive` blesses even on a gallery (before the `!v` guard) so a
+  gallery-first user can turn on sound.
+- **Server (videos.ts / types.ts).** `.m4a`→audio/mp4, `.mp3`→audio/mpeg added to the MIME table
+  (served by the same Range path); `FeedItem.audio?` is attached to a gallery item IFF a bare
+  `<id>.{m4a,mp3}` sits beside its `<id>_NN` frames — the disambiguator (a stray audio whose id has
+  no frames is dropped, never a feed item). Prefer `.m4a` on a tie. No per-file stat (stays cheap).
+- **Crop refinement (fit.ts / ImageCarousel.svelte).** `GALLERY_MAX_COVER_RATIO = 1.4` (tighter
+  than the video `MAX_COVER_RATIO = 1.8`), passed only by ImageCarousel via pickFit's
+  `maxCoverRatio` param, so off-aspect photos letterbox instead of cover-cropping ~40%; videos keep
+  1.8 and are byte-unchanged.
+- **Verify.** Audio core device-PROVEN (seam clean under rapid swipe + toggleMute, no route
+  glitch); crop device-verified ("cropping looks better"). Two Opus audits (code/cure-safety +
+  ui/ux) folded pre-ship. Debug overlay gained a `gaud=` probe (channel audible) — pairs with
+  `snd=` to make "exactly one audible" watchable (`snd ⊕ gaud`).
+- **NEXT (fast-follow).** Tap-to-pause a gallery's soundtrack (shape a: mute-and-keep-playing — a
+  `galleryPaused` state folded into `assertGalleryAudio`, resume is a D-safe unmute on the
+  still-playing blessed channel), and a `?debug=1` client override for the debug overlay (the
+  env→`settings.debugPlayback` path is code-correct end-to-end; the override sidesteps SSR/PWA
+  cache so the overlay is reliably enable-able for device-verify).
+
 ## 0.10.0 — image galleries (TikTok photo posts)
 
 Renders multi-image photo posts as swipeable carousels alongside videos. Cross-repo milestone with
