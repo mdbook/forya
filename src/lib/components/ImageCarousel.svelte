@@ -85,6 +85,7 @@
 			tapCandidate = false;
 			wheelPx = 0;
 			wheeling = false;
+			wheelPeakVx = 0;
 		}
 	});
 
@@ -166,10 +167,15 @@
 	// swipes were dropped until a click, #1578); continuous ⇒ smooth (TikTok-like), not stepped/janky.
 	// WHEEL_SNAP_FRAC + the quiet-gap are device-tunable; the deltaX SIGN (scroll-dir → next/prev) is
 	// device-confirmable (one-line flip if reversed on the operator's trackpad scroll setting).
+	// Device-tunable (the trackpad's physical momentum profile can't be fully predicted from source):
 	const WHEEL_SNAP_FRAC = 0.22; // commit to the next image once |wheelPx| passes this × width
-	const WHEEL_QUIET_MS = 90; // wheel-idle gap that ends the gesture (incl. momentum) → snap
+	const WHEEL_FLICK_VEL = 0.55; // OR a decisive flick: peak |wheel velocity| (px/ms) → commit +1
+	const WHEEL_QUIET_MS = 160; // wheel-idle gap that ends the gesture — long enough to span a
+	// momentum-tail LULL so settleWheel doesn't fire early on a partial offset (#1591 no-advance/overshoot).
 	let wheelPx = $state(0); // live horizontal wheel offset added to the track transform
 	let wheeling = $state(false); // drives .wheeling (transition off while the wheel gesture tracks)
+	let wheelPeakVx = 0; // signed PEAK velocity of the gesture, for the flick-commit (reset on settle)
+	let wheelLastT = 0; // ts of the last wheel event, for the velocity delta
 	let wheelTimer: ReturnType<typeof setTimeout> | undefined;
 
 	function onWheel(e: WheelEvent) {
@@ -182,24 +188,38 @@
 		// Claim horizontal: suppress the browser's two-finger history back/forward swipe.
 		e.preventDefault();
 		wheeling = true;
+		// Instantaneous velocity in wheelPx's direction (px/ms); track the PEAK over the gesture so a
+		// decisive-but-short flick commits on intent even when net distance is small. Guard a stale/
+		// cross-gesture dt (first event after idle) so it contributes ~0, not a spike.
+		const dt = e.timeStamp - wheelLastT;
+		wheelLastT = e.timeStamp;
+		const vx = dt > 0 && dt < 200 ? -e.deltaX / dt : 0;
+		if (Math.abs(vx) > Math.abs(wheelPeakVx)) wheelPeakVx = vx;
 		// Follow the wheel live, CLAMPED to ±one image width so a long momentum tail can only ever move
 		// one image (the whole flick+momentum resolves to a single snap — never a runaway multi-step).
 		// Sign: a natural-scroll swipe toward the next image gives deltaX>0 → track moves left (−).
 		const w = width();
 		wheelPx = Math.max(-w, Math.min(w, wheelPx - e.deltaX));
 		// The momentum tail keeps firing, so the gesture "ends" only after a genuine quiet gap — re-arm
-		// the idle timer on every event; when it finally fires, snap by distance.
+		// the idle timer on every event; when it finally fires (a real lull), snap.
 		clearTimeout(wheelTimer);
 		wheelTimer = setTimeout(settleWheel, WHEEL_QUIET_MS);
 	}
-	// A wheel gesture went idle (incl. its momentum tail) → snap to the next/prev image if the offset
-	// passed the threshold, else settle back. Mirrors settleDrag's commit-by-distance for the pointer
-	// path; re-enables the transition so the snap animates. NO lock to get stuck (the #1578 fix).
+	// A wheel gesture went idle (incl. its momentum tail) → commit to the next/prev image on distance
+	// OR a decisive flick, else settle back. Mirrors settleDrag's `far || flick` for the pointer path;
+	// re-enables the transition so the snap animates. NO lock to get stuck (the #1578 fix). After a
+	// commit both accumulators reset, so a decayed tail-after-commit stays below both thresholds → no
+	// re-commit/overshoot (#1591).
 	function settleWheel() {
 		wheeling = false;
 		const moved = wheelPx;
+		const peakVx = wheelPeakVx;
 		wheelPx = 0;
-		if (Math.abs(moved) > width() * WHEEL_SNAP_FRAC) go(index + (moved < 0 ? 1 : -1));
+		wheelPeakVx = 0;
+		const far = Math.abs(moved) > width() * WHEEL_SNAP_FRAC;
+		const flick =
+			Math.abs(peakVx) > WHEEL_FLICK_VEL && moved !== 0 && Math.sign(peakVx) === Math.sign(moved);
+		if (far || flick) go(index + (moved < 0 ? 1 : -1));
 	}
 
 	function width(): number {
