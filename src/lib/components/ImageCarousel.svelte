@@ -83,8 +83,8 @@
 			dragPx = 0;
 			axis = 'none';
 			tapCandidate = false;
-			wheelAccum = 0;
-			wheelLock = false;
+			wheelPx = 0;
+			wheeling = false;
 		}
 	});
 
@@ -156,40 +156,50 @@
 	const FLICK_PX_PER_MS = 0.3;
 	const H_BIAS = 1.3;
 
-	// Trackpad two-finger horizontal swipe (round-3 fast-follow, #1549): desktop/laptop trackpads
-	// fire `wheel` events (deltaX), NOT touch — so the pointer finger-drag above never sees them.
-	// Accumulate horizontal deltaX and step ONE frame per threshold, then LOCK until a quiet gap,
-	// so a single inertial flick (a burst of momentum wheel events) advances exactly one image, not
-	// five. A vertical-dominant wheel (deltaY) is left untouched → the feed's scroll-snap pages
-	// posts. WHEEL_STEP_PX + the quiet-gap are device-tunable.
-	const WHEEL_STEP_PX = 40;
-	const WHEEL_QUIET_MS = 140;
-	let wheelAccum = 0;
-	let wheelLock = false;
+	// Trackpad two-finger horizontal swipe (round-3 fast-follow, #1549; RED-fix #1578). Desktop/laptop
+	// trackpads fire `wheel` events (deltaX), NOT touch — the pointer finger-drag above never sees
+	// them. CONTINUOUS live-track + snap-on-quiet (NOT a step-lock): the wheel offset moves the track
+	// in REAL TIME (like the finger-drag), CLAMPED to ±one image width so a flick's momentum tail
+	// (which keeps firing wheel events for ~0.5-1s after the fingers lift) can only ever move ONE
+	// image; a wheel-idle gap SNAPS by distance and resets. No lock ⇒ no stuck state (the old
+	// step-lock's quiet-timer was starved by the momentum tail → the unlock never fired → back-to-back
+	// swipes were dropped until a click, #1578); continuous ⇒ smooth (TikTok-like), not stepped/janky.
+	// WHEEL_SNAP_FRAC + the quiet-gap are device-tunable; the deltaX SIGN (scroll-dir → next/prev) is
+	// device-confirmable (one-line flip if reversed on the operator's trackpad scroll setting).
+	const WHEEL_SNAP_FRAC = 0.22; // commit to the next image once |wheelPx| passes this × width
+	const WHEEL_QUIET_MS = 90; // wheel-idle gap that ends the gesture (incl. momentum) → snap
+	let wheelPx = $state(0); // live horizontal wheel offset added to the track transform
+	let wheeling = $state(false); // drives .wheeling (transition off while the wheel gesture tracks)
 	let wheelTimer: ReturnType<typeof setTimeout> | undefined;
 
 	function onWheel(e: WheelEvent) {
 		if (frames.length < 2) return;
 		// A finger-drag already owns the gesture — don't let a concurrent wheel (hybrid touchscreen
-		// laptop / a trackpad flick landing mid-drag) step `index` against a live `dragPx` and desync
-		// the transform into a visible jump (code audit S1).
+		// laptop / a trackpad flick landing mid-drag) fight the live `dragPx` (code audit S1).
 		if (dragging) return;
 		// Only claim a CLEARLY-horizontal wheel; a vertical/diagonal one pages the feed (deltaY).
 		if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
 		// Claim horizontal: suppress the browser's two-finger history back/forward swipe.
 		e.preventDefault();
+		wheeling = true;
+		// Follow the wheel live, CLAMPED to ±one image width so a long momentum tail can only ever move
+		// one image (the whole flick+momentum resolves to a single snap — never a runaway multi-step).
+		// Sign: a natural-scroll swipe toward the next image gives deltaX>0 → track moves left (−).
+		const w = width();
+		wheelPx = Math.max(-w, Math.min(w, wheelPx - e.deltaX));
+		// The momentum tail keeps firing, so the gesture "ends" only after a genuine quiet gap — re-arm
+		// the idle timer on every event; when it finally fires, snap by distance.
 		clearTimeout(wheelTimer);
-		wheelTimer = setTimeout(() => {
-			wheelAccum = 0;
-			wheelLock = false;
-		}, WHEEL_QUIET_MS);
-		if (wheelLock) return; // already stepped this flick — hold until the momentum quiets
-		wheelAccum += e.deltaX;
-		if (Math.abs(wheelAccum) >= WHEEL_STEP_PX) {
-			go(index + (wheelAccum > 0 ? 1 : -1));
-			wheelLock = true;
-			wheelAccum = 0;
-		}
+		wheelTimer = setTimeout(settleWheel, WHEEL_QUIET_MS);
+	}
+	// A wheel gesture went idle (incl. its momentum tail) → snap to the next/prev image if the offset
+	// passed the threshold, else settle back. Mirrors settleDrag's commit-by-distance for the pointer
+	// path; re-enables the transition so the snap animates. NO lock to get stuck (the #1578 fix).
+	function settleWheel() {
+		wheeling = false;
+		const moved = wheelPx;
+		wheelPx = 0;
+		if (Math.abs(moved) > width() * WHEEL_SNAP_FRAC) go(index + (moved < 0 ? 1 : -1));
 	}
 
 	function width(): number {
@@ -295,7 +305,8 @@
 		<div
 			class="track"
 			class:dragging
-			style:transform={`translateX(calc(${-index * 100}% + ${dragPx}px))`}
+			class:wheeling
+			style:transform={`translateX(calc(${-index * 100}% + ${dragPx + wheelPx}px))`}
 		>
 			{#each frames as frame, i (frame.name)}
 				<div class="frame">
@@ -385,9 +396,11 @@
 		will-change: transform;
 	}
 
-	/* While the finger is down the track follows in real time — kill the transition so it tracks
-	   1:1; on release .dragging drops and the snap animates over the restored 0.3s. */
-	.track.dragging {
+	/* While the finger is down (.dragging) OR a trackpad wheel gesture is live (.wheeling) the track
+	   follows in real time — kill the transition so it tracks 1:1; on release the class drops and the
+	   snap animates over the restored 0.3s. */
+	.track.dragging,
+	.track.wheeling {
 		transition: none;
 	}
 
