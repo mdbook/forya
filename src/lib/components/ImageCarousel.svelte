@@ -21,6 +21,7 @@
 		viewportAR,
 		autoAdvance = false,
 		muted = true,
+		paused = false,
 		ontap,
 		onadvance
 	}: {
@@ -35,6 +36,9 @@
 		 *  actual audio is the single blessed <audio> channel Feed owns; this component stays inert
 		 *  to playback. `!muted` on an active gallery ⟺ audible (muted only ever clears via bless). */
 		muted?: boolean;
+		/** This active gallery's soundtrack is user-PAUSED (round-3 fast-follow). Presentational only
+		 *  (dims the ♪ chip) — the actual pause is Feed's galleryPaused → assertGalleryAudio. */
+		paused?: boolean;
 		/** A genuine tap (not a swipe) on the gallery — Feed routes it to onTapGesture so double-
 		 *  tap-to-like + the heart burst work identically to a video (the app's signature gesture).
 		 *  Every video-specific op in that handler no-ops on a gallery (activeVideo() is null). */
@@ -79,7 +83,22 @@
 			dragPx = 0;
 			axis = 'none';
 			tapCandidate = false;
+			wheelAccum = 0;
+			wheelLock = false;
 		}
+	});
+
+	// Bind the trackpad wheel listener NON-passively (round-3 fast-follow) so `preventDefault()` can
+	// suppress the browser's horizontal two-finger history-swipe — Svelte's `onwheel` attribute is
+	// registered passive for wheel, where preventDefault is a no-op. Cleaned up with the element.
+	$effect(() => {
+		const el = carouselEl;
+		if (!el) return;
+		el.addEventListener('wheel', onWheel, { passive: false });
+		return () => {
+			el.removeEventListener('wheel', onWheel);
+			clearTimeout(wheelTimer);
+		};
 	});
 
 	function go(next: number) {
@@ -136,6 +155,42 @@
 	// scroll instead of being stolen by the carousel.
 	const FLICK_PX_PER_MS = 0.3;
 	const H_BIAS = 1.3;
+
+	// Trackpad two-finger horizontal swipe (round-3 fast-follow, #1549): desktop/laptop trackpads
+	// fire `wheel` events (deltaX), NOT touch — so the pointer finger-drag above never sees them.
+	// Accumulate horizontal deltaX and step ONE frame per threshold, then LOCK until a quiet gap,
+	// so a single inertial flick (a burst of momentum wheel events) advances exactly one image, not
+	// five. A vertical-dominant wheel (deltaY) is left untouched → the feed's scroll-snap pages
+	// posts. WHEEL_STEP_PX + the quiet-gap are device-tunable.
+	const WHEEL_STEP_PX = 40;
+	const WHEEL_QUIET_MS = 140;
+	let wheelAccum = 0;
+	let wheelLock = false;
+	let wheelTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function onWheel(e: WheelEvent) {
+		if (frames.length < 2) return;
+		// A finger-drag already owns the gesture — don't let a concurrent wheel (hybrid touchscreen
+		// laptop / a trackpad flick landing mid-drag) step `index` against a live `dragPx` and desync
+		// the transform into a visible jump (code audit S1).
+		if (dragging) return;
+		// Only claim a CLEARLY-horizontal wheel; a vertical/diagonal one pages the feed (deltaY).
+		if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+		// Claim horizontal: suppress the browser's two-finger history back/forward swipe.
+		e.preventDefault();
+		clearTimeout(wheelTimer);
+		wheelTimer = setTimeout(() => {
+			wheelAccum = 0;
+			wheelLock = false;
+		}, WHEEL_QUIET_MS);
+		if (wheelLock) return; // already stepped this flick — hold until the momentum quiets
+		wheelAccum += e.deltaX;
+		if (Math.abs(wheelAccum) >= WHEEL_STEP_PX) {
+			go(index + (wheelAccum > 0 ? 1 : -1));
+			wheelLock = true;
+			wheelAccum = 0;
+		}
+	}
 
 	function width(): number {
 		return carouselEl?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 1);
@@ -264,7 +319,7 @@
 		     audible (active card + sound on). Decorative + pointer-events:none — the rail mute button
 		     is the control; bottom-left keeps it clear of the counter (top-right), dots (bottom-
 		     center), rail (right) and the /liked back-chip (top-left). -->
-		<div class="audio-chip" class:on={active && !muted} aria-hidden="true">
+		<div class="audio-chip" class:on={active && !muted && !paused} aria-hidden="true">
 			<Music size={14} aria-hidden="true" />
 		</div>
 	{/if}
