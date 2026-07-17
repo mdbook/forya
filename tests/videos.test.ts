@@ -44,6 +44,12 @@ describe('mimeFromExt', () => {
 		expect(mimeFromExt('7_01.webp')).toBe('image/webp');
 	});
 
+	it('maps gallery soundtrack extensions (round-3 audio)', () => {
+		expect(mimeFromExt('7.m4a')).toBe('audio/mp4');
+		expect(mimeFromExt('7.M4A')).toBe('audio/mp4');
+		expect(mimeFromExt('7.mp3')).toBe('audio/mpeg');
+	});
+
 	it('falls back for unknown extensions', () => {
 		expect(mimeFromExt('a.txt')).toBe('application/octet-stream');
 	});
@@ -211,6 +217,72 @@ describe('scanVideos image galleries (Contract A: <id>_NN.<ext> grouping)', () =
 
 	it('safeMediaPath resolves a frame name (I2 read-side, served via /api/media)', () => {
 		expect(safeMediaPath('700_01.jpg', dir)).toBe(path.join(path.resolve(dir), '700_01.jpg'));
+	});
+});
+
+describe('scanVideos gallery soundtracks (round-3: <id>.{m4a,mp3} audio, IFF frames exist)', () => {
+	it('attaches a bare <id>.m4a soundtrack to the gallery item (audio field)', async () => {
+		await write('700_01.jpg');
+		await write('700_02.jpg');
+		await write('700.m4a');
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(1);
+		const g = items[0];
+		expect(g.name).toBe('700');
+		expect(g.media).toHaveLength(2); // the .m4a is NOT a frame
+		expect(g.audio).toEqual({
+			name: '700.m4a',
+			url: '/api/media/700.m4a',
+			type: 'audio/mp4'
+		});
+	});
+
+	it('supports an .mp3 soundtrack too', async () => {
+		await write('8_01.jpg');
+		await write('8.mp3');
+		const items = await scanVideos(dir, true);
+		expect(items[0].audio).toEqual({
+			name: '8.mp3',
+			url: '/api/media/8.mp3',
+			type: 'audio/mpeg'
+		});
+	});
+
+	it('DISAMBIGUATOR: a bare <id>.{m4a,mp3} with NO frames is NOT a gallery and is dropped', async () => {
+		await write('999.m4a'); // no 999_NN frames
+		await write('888.mp3'); // no 888_NN frames
+		const items = await scanVideos(dir, true);
+		expect(items).toEqual([]); // audio without frames never becomes a feed item
+	});
+
+	it('an audioless gallery has NO audio field (byte-identical to pre-round-3)', async () => {
+		await write('55_01.jpg');
+		await write('55_02.jpg');
+		const items = await scanVideos(dir, true);
+		expect(items[0].media).toHaveLength(2);
+		expect(items[0].audio).toBeUndefined();
+	});
+
+	it('prefers .m4a (AAC) over .mp3 when a post somehow has both (deterministic)', async () => {
+		await write('70_01.jpg');
+		await write('70.mp3');
+		await write('70.m4a');
+		const items = await scanVideos(dir, true);
+		expect(items[0].audio?.name).toBe('70.m4a');
+		expect(items[0].audio?.type).toBe('audio/mp4');
+	});
+
+	it('a soundtrack binds only to its OWN gallery; a nearby video is untouched', async () => {
+		await write('100.mp4'); // video — never treated as audio
+		await write('200_01.jpg');
+		await write('200.m4a'); // binds to gallery 200 only
+		await write('300_01.jpg'); // audioless gallery
+		const items = await scanVideos(dir, true);
+		const vid = items.find((i) => i.name === '100.mp4')!;
+		expect(vid.audio).toBeUndefined();
+		expect(vid.media).toBeUndefined();
+		expect(items.find((i) => i.name === '200')!.audio?.name).toBe('200.m4a');
+		expect(items.find((i) => i.name === '300')!.audio).toBeUndefined();
 	});
 });
 

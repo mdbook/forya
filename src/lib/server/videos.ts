@@ -8,7 +8,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './config';
-import type { FeedItem } from '$lib/types';
+import type { FeedItem, MediaFrame } from '$lib/types';
 
 export const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.webm', '.m4v'] as const;
 
@@ -24,7 +24,14 @@ const MIME_BY_EXT: Record<string, string> = {
 	'.jpg': 'image/jpeg',
 	'.jpeg': 'image/jpeg',
 	'.png': 'image/png',
-	'.webp': 'image/webp'
+	'.webp': 'image/webp',
+	// Gallery soundtracks (TikTok photo-post audio, round-3): a photo post can carry a music track
+	// saved as a bare `<id>.{m4a,mp3}` beside its `<id>_NN.*` frames. Served by the SAME /api/media
+	// Range endpoint (iOS seeks/streams audio via Range too), so its content-type belongs here
+	// alongside the video + frame types — without it the track would serve as
+	// application/octet-stream and iOS wouldn't play it. Videos/frames unaffected.
+	'.m4a': 'audio/mp4',
+	'.mp3': 'audio/mpeg'
 };
 
 /** MIME type from a filename's extension (SPEC §3 table). */
@@ -45,6 +52,14 @@ export function isVideoFile(name: string): boolean {
  *  is pure digits (validated on the tiktok-sync WRITE side too, I2), so the only `_` is the
  *  frame separator and a crafted id can't smuggle a `_NN`. */
 const FRAME_RE = /^(\d+)_(\d{2})\.(jpg|jpeg|png|webp)$/i;
+
+/** Contract A gallery soundtrack: a bare pure-digit-id audio file `<id>.{m4a,mp3}` (round-3) —
+ *  the same `<id>` stem as the post's `<id>_NN.*` frames. It is gallery-audio IFF matching frames
+ *  exist (the disambiguator vs a stray audio file), which is enforced by only attaching it to an
+ *  emitted gallery item (an id with no frames never becomes a gallery, so its audio is dropped).
+ *  The id is pure digits (validated on the tiktok-sync WRITE side too, I2), disjoint from a
+ *  video's `<id>.{mp4,…}` (different ext) and from a gallery's bare `<id>` name (has an ext). */
+const AUDIO_RE = /^(\d+)\.(m4a|mp3)$/i;
 
 /** Dotfiles and `.partial` (tiktok-sync's mid-download files) — mirrors erin's
  *  IGNORE_HIDDEN_PATHS. */
@@ -138,6 +153,11 @@ async function doScan(
 	// object; ids are pure digits (FRAME_RE). Frames never per-file stat — a gallery carries
 	// no poster/mtime cache key, so it stays cheap even on the full-stat (poster) path.
 	const galleries: Record<string, { name: string; idx: string }[]> = {};
+	// Gallery soundtracks accumulate here by post id (round-3): a bare `<id>.{m4a,mp3}` beside the
+	// frames. Attached to the gallery item below ONLY for ids that also have frames (the
+	// disambiguator) — a stray audio whose id has no frames falls through unused, never a feed
+	// item. Never per-file stats (a gallery carries no cache key), so it stays cheap.
+	const audioById: Record<string, MediaFrame> = {};
 	for (const ent of entries) {
 		if (!ent.isFile()) continue;
 		const name = ent.name;
@@ -148,6 +168,21 @@ async function doScan(
 		const fm = FRAME_RE.exec(name);
 		if (fm) {
 			(galleries[fm[1]] ??= []).push({ name, idx: fm[2] });
+			continue;
+		}
+		// Gallery soundtrack: a bare `<id>.{m4a,mp3}`. Accumulate by id; the gallery emit below
+		// attaches it IFF that id has frames. Prefer `.m4a` (AAC) if a post somehow has both —
+		// deterministic + best iOS support. (An audio file is never a standalone feed item.)
+		const am = AUDIO_RE.exec(name);
+		if (am) {
+			const prev = audioById[am[1]];
+			if (!prev || (am[2].toLowerCase() === 'm4a' && prev.type === 'audio/mpeg')) {
+				audioById[am[1]] = {
+					name,
+					url: `/api/media/${encodeURIComponent(name)}`,
+					type: mimeFromExt(name)
+				};
+			}
 			continue;
 		}
 		if (!isVideoFile(name)) continue;
@@ -185,7 +220,13 @@ async function doScan(
 			url: `/api/media/${encodeURIComponent(f.name)}`,
 			type: mimeFromExt(f.name)
 		}));
-		items.push({ name: id, url: media[0].url, type: media[0].type, media });
+		const item: FeedItem = { name: id, url: media[0].url, type: media[0].type, media };
+		// Attach the soundtrack IFF this id (which HAS frames → is a gallery) also has a bare
+		// `<id>.{m4a,mp3}`. This presence-check is the "gallery-audio IFF frames exist"
+		// disambiguator: an audio file whose id has no frames never reaches this loop, so it's
+		// dropped. Absent field ⇒ audioless gallery (silent) — byte-identical to pre-round-3.
+		if (audioById[id]) item.audio = audioById[id];
+		items.push(item);
 	}
 
 	// Name-asc: a stable, deterministic total order over unique filenames so SSR +

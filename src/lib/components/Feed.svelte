@@ -190,6 +190,29 @@
 	let errorSkips = 0;
 	const MAX_ERROR_SKIPS = 3;
 
+	// ── Gallery audio channel (round-3) ──────────────────────────────────────────────
+	// ONE persistent <audio> element that plays the ACTIVE gallery's soundtrack (a TikTok photo
+	// post's `<id>.{m4a,mp3}`). It is NOT a pool <video> — audio-only, zero decoder, never covers
+	// neighbours, never parked into a card (a gallery owns no <video> and consumes no pool slot,
+	// AC-4). It applies the hard-won pool model: once it has a src it plays CONTINUOUSLY MUTED and
+	// is never paused while it holds a track (a blessed element must stay *playing* to keep its
+	// per-element iOS unmute grant — pausing loses it; that's exactly why the pool never pauses
+	// neighbours). It is audible ONLY when (active card is a gallery-with-audio && pool blessed &&
+	// sound on) — the same gate assertActiveAudio uses for the pool. Because the pool is fully
+	// muted whenever a gallery is active (activeSlot()=-1 → driveActive mutes every slot), at most
+	// ONE element is ever audible (a pool video OR this channel, never both) → no A2DP re-arb, the
+	// load-bearing no-regress invariant. The <video> pool's bless/mute/drive code is byte-untouched.
+	let galleryAudio: HTMLAudioElement | null = null;
+	// The soundtrack URL currently loaded on the channel — src-swap dedupe so a re-index / scroll-
+	// back onto the SAME gallery doesn't reload + restart its track (plain, like slotToName).
+	let galleryAudioUrl: string | null = null;
+
+	// True iff the active card is a gallery that carries a soundtrack — the audibility predicate
+	// shared by the channel's assert + the in-gesture bless hooks.
+	function activeGalleryHasAudio(): boolean {
+		return !!(activeItem?.media && activeItem.audio);
+	}
+
 	function slotForName(name: string): number {
 		return slotToName.indexOf(name);
 	}
@@ -351,6 +374,63 @@
 		const v = activeVideo();
 		if (v) v.muted = !(blessed && !muted);
 	}
+
+	// Audibility gate for the gallery-audio channel (round-3) — the exact analog of
+	// assertActiveAudio for the pool: the channel is audible iff the active card is a
+	// gallery-with-audio AND the pool is blessed AND sound is on. muted=false here is the D-safe
+	// off-gesture toggle on the already-playing blessed channel (once its per-element grant is
+	// minted). Pre-bless / muted-feed / non-gallery-active → stays muted (silent). Safe to call
+	// anywhere the pool's audio is re-asserted (drive, mute-toggle, foreground).
+	function assertGalleryAudio() {
+		const a = galleryAudio;
+		if (a) a.muted = !(activeGalleryHasAudio() && blessed && !muted);
+	}
+	// Drive the single gallery-audio channel to the ACTIVE card. Called at the TAIL of syncPool —
+	// AFTER driveActive has already muted the pool for a gallery-active frame — so the channel's
+	// unmute can never overlap an audible pool video (→ no A2DP re-arb). Pure audio: touches no
+	// <video>, no activePaused, no bless flags. When the active card is a gallery-with-audio it
+	// (re)loads + muted-plays the track; the AUDIBLE flip is deferred to the channel's own 'playing'
+	// event (onGalleryAudioPlaying) — mirroring the pool (onActivePlaying→assertActiveAudio), we
+	// NEVER unmute a just-src-swapped, not-yet-confirmed-playing element (that's the iOS-refused
+	// path — code audit S1; `.paused` flips false synchronously on play() so it is NOT a
+	// confirmed-playing signal). When the active card is a video / audioless gallery it only MUTES
+	// the channel synchronously (never pauses a channel that holds a track — preserve the
+	// per-element grant, the pool lesson).
+	function syncGalleryAudio() {
+		const a = galleryAudio;
+		if (!a) return;
+		if (activeGalleryHasAudio()) {
+			const track = activeItem!.audio!;
+			if (galleryAudioUrl !== track.url) {
+				// New gallery → swap the track. Stay MUTED across the swap; audibility is applied by
+				// the 'playing' listener once the NEW track is confirmed playing (the grant survives
+				// the swap — harness A). A fresh src starts at t=0; scrolling BACK to the same gallery
+				// keeps galleryAudioUrl, so its music continues rather than restarting.
+				galleryAudioUrl = track.url;
+				a.muted = true;
+				a.src = track.url;
+				a.play().catch(() => {}); // muted play is gesture-free (the cure); unmute deferred
+				return; // do NOT assert audible synchronously mid-swap — wait for 'playing'
+			}
+			if (a.paused) {
+				// Same track, not playing (e.g. iOS paused it on background) → resume muted; the
+				// 'playing' listener re-applies audibility once it's confirmed playing again.
+				a.muted = true;
+				a.play().catch(() => {});
+				return;
+			}
+		}
+		// Non-swap steady state: active is a video / audioless gallery (→ mute the channel), OR the
+		// SAME gallery already CONFIRMED playing (→ D-safe audible flip). assertGalleryAudio is safe
+		// here — the channel is never mid-swap on this path.
+		assertGalleryAudio();
+	}
+	// The gallery-audio channel is CONFIRMED playing (its 'playing' event) → apply audibility. This
+	// is the channel's analog of the pool's onActivePlaying: the ONLY place a freshly-(re)src'd
+	// track becomes audible, so every unmute is a D-safe flip on a confirmed-playing element.
+	function onGalleryAudioPlaying() {
+		assertGalleryAudio();
+	}
 	// The active element is confirmed playing: clear the blocked/buffering UI, REVEAL it
 	// (cross-fade poster→video), and apply audio. Reveal is active-ONLY: post-bless neighbours
 	// play muted off-screen, so revealing them would expose pre-roll frames (the skip-ahead the
@@ -478,6 +558,9 @@
 		}
 		slotToName = next;
 		driveActive();
+		// Drive the gallery-audio channel AFTER the pool (driveActive muted every slot for a
+		// gallery-active frame), so the channel's unmute never overlaps an audible pool video.
+		syncGalleryAudio();
 	}
 
 	function driveActive() {
@@ -726,6 +809,10 @@
 		if (blessed && !muted) {
 			const v = activeVideo();
 			if (v) v.muted = false;
+			// Round-3: a swipe onto a gallery re-asserts its audio channel through the ONE gate IN
+			// this gesture — mints the channel's per-element grant the first time a gallery is
+			// reached by swipe after blessing on a video (belt-and-suspenders over off-gesture sync).
+			assertGalleryAudio();
 		}
 		if (activeBlocked) {
 			activeVideo()
@@ -750,6 +837,9 @@
 		if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
 		if (!pool.length || visible.length === 0) return;
 		driveActive();
+		// iOS pauses the <audio> channel on background too — resume + re-assert it on return
+		// (mirrors the pool re-drive above). Idempotent; no-op when no gallery is active.
+		syncGalleryAudio();
 	}
 
 	function prefersReducedMotion(): boolean {
@@ -941,16 +1031,23 @@
 
 	function tapActive() {
 		const v = activeVideo();
-		if (!v) return;
 		if (!blessed) {
 			// First interaction = the initiating gesture. The active card is ALREADY muted-
-			// autoplaying (0.6.1), so blessing is a bare synchronous muted=false flip in this
-			// gesture (blessPool) — the canonical iOS tap-to-unmute that sidesteps the buffered-
-			// paused-element unmute WebKit refused (the 0.6.0 two-tap, #570). Sound on.
+			// autoplaying (0.6.1 pool) OR, if it's a GALLERY, its audio channel is muted-playing its
+			// track (round-3) — so blessing is a bare synchronous muted=false flip in this gesture
+			// (blessPool, which unmutes the pool AND the gallery channel) — the canonical iOS
+			// tap-to-unmute that sidesteps the buffered-paused-element unmute WebKit refused (the
+			// 0.6.0 two-tap, #570). Sound on. Runs BEFORE the `!v` guard so a gallery-first user
+			// (lands on a photo post and taps to turn on sound) blesses too — else nothing unmutes.
 			muted = false;
 			blessPool();
 			return;
 		}
+		// Already blessed: play/pause is a VIDEO transport op. A gallery has no pooled <video>
+		// (activeVideo() null) → no-op here; its soundtrack keeps looping (audibility follows the
+		// feed mute via the channel), matching the video path's "tap = play/pause" only where there
+		// IS a transport.
+		if (!v) return;
 		if (v.paused) {
 			activePaused = false;
 			activeBlocked = false;
@@ -991,6 +1088,12 @@
 			v.muted = false; // the bless: a bare synchronous unmute of an already-playing element
 			if (s !== aSlot) v.muted = true; // re-mute neighbours at once (no multi-audio blip)
 		}
+		// Round-3: re-assert the gallery-audio channel through its ONE gate (review #1504②). If the
+		// bless happens while a GALLERY is active this unmutes the channel in this SAME gesture, so
+		// the <audio> mints its own per-element grant (it obeys the same per-element iOS unmute
+		// policy as the pool <video>s; it's already muted-playing its track from syncGalleryAudio,
+		// so this is the identical bare in-gesture unmute). When a VIDEO is active it stays muted.
+		assertGalleryAudio();
 	}
 
 	function toggleMute() {
@@ -1011,6 +1114,10 @@
 			// Muting: silence everything (active + the continuously-playing neighbours).
 			for (const v of pool) v.muted = true;
 		}
+		// Round-3: the gallery-audio channel follows the same mute pref — muted feed → channel
+		// muted (silent); sound on + active gallery → channel audible (D-safe on the blessed,
+		// already-playing channel). One assert covers both directions.
+		assertGalleryAudio();
 	}
 
 	function seekActiveFrac(frac: number) {
@@ -1096,7 +1203,11 @@
 		// prewarm is reused, rs should reach ≥3 (HAVE_FUTURE_DATA) BEFORE the first tap on a
 		// cold card; stuck at 0–1 means Safari isn't reusing the prefetch.
 		const rs = activeVideo()?.readyState ?? -1;
-		debugCounts = `build=${sha} pool=${pool.length} live=${vids.length} play=${playing} data=${data} active=${activeIndex} rs=${rs} blk=${activeBlocked ? 1 : 0} bless=${blessed ? 1 : 0} snd=${snd} ua=${debugUserActivation}`;
+		// gaud = the gallery-audio channel actually audible (has a track, unmuted, playing) — the
+		// round-3 device-verify proof: 1 on an active gallery with sound on, 0 on a video / muted.
+		const gaud =
+			galleryAudio && galleryAudio.src && !galleryAudio.muted && !galleryAudio.paused ? 1 : 0;
+		debugCounts = `build=${sha} pool=${pool.length} live=${vids.length} play=${playing} data=${data} active=${activeIndex} rs=${rs} blk=${activeBlocked ? 1 : 0} bless=${blessed ? 1 : 0} snd=${snd} gaud=${gaud} ua=${debugUserActivation}`;
 	}
 
 	onMount(() => {
@@ -1226,6 +1337,22 @@
 			pool.push(v);
 		}
 
+		// Create the single gallery-audio channel (round-3). Audio-only (no decoder), never pooled,
+		// never parked into a card; muted + looping from birth, driven by syncGalleryAudio as the
+		// active card changes. Appended to document.body (audio has no layout, so a fixed root is
+		// simplest + survives the warming→populated feed transition; teardown removes it — code
+		// audit S3). Its 'playing' event is the ONLY place a (re)src'd track becomes audible
+		// (onGalleryAudioPlaying) — the D-safe, confirmed-playing unmute (code audit S1).
+		const ga = document.createElement('audio');
+		ga.muted = true;
+		ga.loop = true;
+		ga.preload = 'auto';
+		ga.setAttribute('playsinline', '');
+		ga.setAttribute('aria-label', 'Gallery soundtrack'); // SR courtesy (ui/ux audit S3)
+		ga.addEventListener('playing', onGalleryAudioPlaying);
+		document.body.appendChild(ga);
+		galleryAudio = ga;
+
 		io = new IntersectionObserver(
 			(entries) => {
 				for (const entry of entries) {
@@ -1292,6 +1419,15 @@
 				v.removeAttribute('src');
 				v.load();
 			}
+			// Tear down the gallery-audio channel (round-3): stop it, drop its src, remove the node.
+			if (galleryAudio) {
+				galleryAudio.pause();
+				galleryAudio.removeAttribute('src');
+				galleryAudio.load();
+				galleryAudio.remove();
+				galleryAudio = null;
+				galleryAudioUrl = null;
+			}
 		};
 	});
 
@@ -1316,6 +1452,10 @@
 		void activeIndex;
 		void visible;
 		void cardSlotByName;
+		// syncPool's tail (syncGalleryAudio) reads the derived `activeItem` inside the untrack, so
+		// make that dependency EXPLICIT rather than incidental (it's already implied by activeIndex +
+		// visible, but a future refactor mustn't silently drop the channel's updates — code audit S2).
+		void activeItem;
 		untrack(() => syncPool());
 	});
 
@@ -1378,6 +1518,7 @@
 							active={i === activeIndex}
 							{viewportAR}
 							{autoAdvance}
+							{muted}
 							ontap={onTapGesture}
 							onadvance={() => scrollTo(activeIndex + 1)}
 						/>

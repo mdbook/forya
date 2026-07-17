@@ -4,6 +4,30 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.11.0 — gallery audio (+ crop refinement)
+
+Photo-post galleries now **play their soundtrack** — the TikTok track that ships beside the
+frames — looping and mute-respecting, right in the feed. This completes the image-galleries
+feature (0.10.0 was images-only). Includes a gallery cropping refinement from device-verify.
+
+- **Gallery soundtrack**: a photo post with a `<id>.{m4a,mp3}` track beside its frames plays it,
+  looping, in sync with the feed's mute state — silent until you turn sound on, silent again on a
+  video or a soundtrack-less gallery. A ♪ chip marks a gallery that has audio (bright while it's
+  playing, dim when muted).
+- **One audible element, ever**: gallery audio rides a single persistent, gesture-blessed
+  `<audio>` channel — never a `<video>`, never the pool. When a gallery is active the whole video
+  pool is muted, so at most one element is ever audible; scrolling between videos and galleries
+  hands audio off cleanly with no Bluetooth-route glitch. The video sound-carry machine is
+  byte-unchanged.
+- **Served over the same path**: soundtracks stream through the Range-correct `/api/media`
+  endpoint (audio MIME types added); a track counts as gallery audio only when matching `<id>_NN`
+  frames exist, so a stray audio file is never served on its own.
+- **Crop refinement**: gallery photos letterbox sooner than videos — wide/square/landscape photos
+  now show the whole image instead of cover-cropping a large chunk (videos are unchanged). Fixes
+  "cropping on a gallery sometimes cuts out a lot of the image."
+
+_(Follow-up: tap-to-pause a gallery's audio, and a `?debug=1` overlay toggle — shipping next.)_
+
 ## 0.10.0 — image galleries (TikTok photo posts)
 
 forya now renders **photo posts** — multi-image "carousel" posts — as swipeable galleries
