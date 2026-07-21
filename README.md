@@ -53,8 +53,9 @@ serving backend. See [`handoff.md`](./handoff.md) for the full story.
   carousels alongside videos — finger-follow drag, index dots/counter, double-tap
   to like, and a full-carousel share link. One photo post = one feed item (flat
   `<id>_NN.<ext>` frames grouped by id). A gallery with a soundtrack (`<id>.{m4a,mp3}`
-  beside its frames) **plays it, looping and mute-respecting** (a ♪ chip marks it);
-  off-aspect photos letterbox instead of over-cropping. Galleries never touch the
+  beside its frames) **plays it, looping and mute-respecting** (a ♪ chip marks it; tap
+  to pause). Swipe by touch or a two-finger trackpad gesture; off-aspect photos
+  letterbox instead of over-cropping. Galleries never touch the
   video decoder pool — gallery audio rides a single blessed `<audio>` channel, and
   at most one element is ever audible.
 - **Installable PWA**: per-instance home-screen name, standalone portrait.

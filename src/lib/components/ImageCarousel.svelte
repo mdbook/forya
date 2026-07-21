@@ -21,6 +21,7 @@
 		viewportAR,
 		autoAdvance = false,
 		muted = true,
+		paused = false,
 		ontap,
 		onadvance
 	}: {
@@ -35,6 +36,9 @@
 		 *  actual audio is the single blessed <audio> channel Feed owns; this component stays inert
 		 *  to playback. `!muted` on an active gallery ⟺ audible (muted only ever clears via bless). */
 		muted?: boolean;
+		/** This active gallery's soundtrack is user-PAUSED (round-3 fast-follow). Presentational only
+		 *  (dims the ♪ chip) — the actual pause is Feed's galleryPaused → assertGalleryAudio. */
+		paused?: boolean;
 		/** A genuine tap (not a swipe) on the gallery — Feed routes it to onTapGesture so double-
 		 *  tap-to-like + the heart burst work identically to a video (the app's signature gesture).
 		 *  Every video-specific op in that handler no-ops on a gallery (activeVideo() is null). */
@@ -79,7 +83,23 @@
 			dragPx = 0;
 			axis = 'none';
 			tapCandidate = false;
+			wheelPx = 0;
+			wheeling = false;
+			wheelPeakVx = 0;
 		}
+	});
+
+	// Bind the trackpad wheel listener NON-passively (round-3 fast-follow) so `preventDefault()` can
+	// suppress the browser's horizontal two-finger history-swipe — Svelte's `onwheel` attribute is
+	// registered passive for wheel, where preventDefault is a no-op. Cleaned up with the element.
+	$effect(() => {
+		const el = carouselEl;
+		if (!el) return;
+		el.addEventListener('wheel', onWheel, { passive: false });
+		return () => {
+			el.removeEventListener('wheel', onWheel);
+			clearTimeout(wheelTimer);
+		};
 	});
 
 	function go(next: number) {
@@ -136,6 +156,71 @@
 	// scroll instead of being stolen by the carousel.
 	const FLICK_PX_PER_MS = 0.3;
 	const H_BIAS = 1.3;
+
+	// Trackpad two-finger horizontal swipe (round-3 fast-follow, #1549; RED-fix #1578). Desktop/laptop
+	// trackpads fire `wheel` events (deltaX), NOT touch — the pointer finger-drag above never sees
+	// them. CONTINUOUS live-track + snap-on-quiet (NOT a step-lock): the wheel offset moves the track
+	// in REAL TIME (like the finger-drag), CLAMPED to ±one image width so a flick's momentum tail
+	// (which keeps firing wheel events for ~0.5-1s after the fingers lift) can only ever move ONE
+	// image; a wheel-idle gap SNAPS by distance and resets. No lock ⇒ no stuck state (the old
+	// step-lock's quiet-timer was starved by the momentum tail → the unlock never fired → back-to-back
+	// swipes were dropped until a click, #1578); continuous ⇒ smooth (TikTok-like), not stepped/janky.
+	// WHEEL_SNAP_FRAC + the quiet-gap are device-tunable; the deltaX SIGN (scroll-dir → next/prev) is
+	// device-confirmable (one-line flip if reversed on the operator's trackpad scroll setting).
+	// Device-tunable (the trackpad's physical momentum profile can't be fully predicted from source):
+	const WHEEL_SNAP_FRAC = 0.22; // commit to the next image once |wheelPx| passes this × width
+	const WHEEL_FLICK_VEL = 0.55; // OR a decisive flick: peak |wheel velocity| (px/ms) → commit +1
+	const WHEEL_QUIET_MS = 160; // wheel-idle gap that ends the gesture — long enough to span a
+	// momentum-tail LULL so settleWheel doesn't fire early on a partial offset (#1591 no-advance/overshoot).
+	let wheelPx = $state(0); // live horizontal wheel offset added to the track transform
+	let wheeling = $state(false); // drives .wheeling (transition off while the wheel gesture tracks)
+	let wheelPeakVx = 0; // signed PEAK velocity of the gesture, for the flick-commit (reset on settle)
+	let wheelLastT = 0; // ts of the last wheel event, for the velocity delta
+	let wheelTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function onWheel(e: WheelEvent) {
+		if (frames.length < 2) return;
+		// A finger-drag already owns the gesture — don't let a concurrent wheel (hybrid touchscreen
+		// laptop / a trackpad flick landing mid-drag) fight the live `dragPx` (code audit S1).
+		if (dragging) return;
+		// Only claim a CLEARLY-horizontal wheel; a vertical/diagonal one pages the feed (deltaY).
+		if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+		// Claim horizontal: suppress the browser's two-finger history back/forward swipe.
+		e.preventDefault();
+		wheeling = true;
+		// Instantaneous velocity in wheelPx's direction (px/ms); track the PEAK over the gesture so a
+		// decisive-but-short flick commits on intent even when net distance is small. Guard a stale/
+		// cross-gesture dt (first event after idle) so it contributes ~0, not a spike.
+		const dt = e.timeStamp - wheelLastT;
+		wheelLastT = e.timeStamp;
+		const vx = dt > 0 && dt < 200 ? -e.deltaX / dt : 0;
+		if (Math.abs(vx) > Math.abs(wheelPeakVx)) wheelPeakVx = vx;
+		// Follow the wheel live, CLAMPED to ±one image width so a long momentum tail can only ever move
+		// one image (the whole flick+momentum resolves to a single snap — never a runaway multi-step).
+		// Sign: a natural-scroll swipe toward the next image gives deltaX>0 → track moves left (−).
+		const w = width();
+		wheelPx = Math.max(-w, Math.min(w, wheelPx - e.deltaX));
+		// The momentum tail keeps firing, so the gesture "ends" only after a genuine quiet gap — re-arm
+		// the idle timer on every event; when it finally fires (a real lull), snap.
+		clearTimeout(wheelTimer);
+		wheelTimer = setTimeout(settleWheel, WHEEL_QUIET_MS);
+	}
+	// A wheel gesture went idle (incl. its momentum tail) → commit to the next/prev image on distance
+	// OR a decisive flick, else settle back. Mirrors settleDrag's `far || flick` for the pointer path;
+	// re-enables the transition so the snap animates. NO lock to get stuck (the #1578 fix). After a
+	// commit both accumulators reset, so a decayed tail-after-commit stays below both thresholds → no
+	// re-commit/overshoot (#1591).
+	function settleWheel() {
+		wheeling = false;
+		const moved = wheelPx;
+		const peakVx = wheelPeakVx;
+		wheelPx = 0;
+		wheelPeakVx = 0;
+		const far = Math.abs(moved) > width() * WHEEL_SNAP_FRAC;
+		const flick =
+			Math.abs(peakVx) > WHEEL_FLICK_VEL && moved !== 0 && Math.sign(peakVx) === Math.sign(moved);
+		if (far || flick) go(index + (moved < 0 ? 1 : -1));
+	}
 
 	function width(): number {
 		return carouselEl?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 1);
@@ -240,7 +325,8 @@
 		<div
 			class="track"
 			class:dragging
-			style:transform={`translateX(calc(${-index * 100}% + ${dragPx}px))`}
+			class:wheeling
+			style:transform={`translateX(calc(${-index * 100}% + ${dragPx + wheelPx}px))`}
 		>
 			{#each frames as frame, i (frame.name)}
 				<div class="frame">
@@ -264,7 +350,7 @@
 		     audible (active card + sound on). Decorative + pointer-events:none — the rail mute button
 		     is the control; bottom-left keeps it clear of the counter (top-right), dots (bottom-
 		     center), rail (right) and the /liked back-chip (top-left). -->
-		<div class="audio-chip" class:on={active && !muted} aria-hidden="true">
+		<div class="audio-chip" class:on={active && !muted && !paused} aria-hidden="true">
 			<Music size={14} aria-hidden="true" />
 		</div>
 	{/if}
@@ -330,9 +416,11 @@
 		will-change: transform;
 	}
 
-	/* While the finger is down the track follows in real time — kill the transition so it tracks
-	   1:1; on release .dragging drops and the snap animates over the restored 0.3s. */
-	.track.dragging {
+	/* While the finger is down (.dragging) OR a trackpad wheel gesture is live (.wheeling) the track
+	   follows in real time — kill the transition so it tracks 1:1; on release the class drops and the
+	   snap animates over the restored 0.3s. */
+	.track.dragging,
+	.track.wheeling {
 		transition: none;
 	}
 

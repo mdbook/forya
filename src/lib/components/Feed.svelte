@@ -206,6 +206,17 @@
 	// The soundtrack URL currently loaded on the channel — src-swap dedupe so a re-index / scroll-
 	// back onto the SAME gallery doesn't reload + restart its track (plain, like slotToName).
 	let galleryAudioUrl: string | null = null;
+	// Gallery-audio PAUSE intent (round-3 fast-follow) — the gallery analog of activePaused for
+	// video. Folded into assertGalleryAudio so the channel stays PLAYING (grant preserved, the pool
+	// lesson) and pause is just the muted flip; resume is a D-safe unmute. The toggle is DEFERRED
+	// past the double-tap window (SEQ_WINDOW_MS): a double-tap is a LIKE (which cancels the pending
+	// toggle), so a like never blips the audio nor flashes the chip — and the bless-edge double-tap
+	// ends liked+AUDIBLE (the toggle it would have scheduled is cancelled). This is why it needs no
+	// M6-reconcile: the flip simply never happens on a double. Per-card: it persists across carousel
+	// FRAME-swipes (Feed-level state; ImageCarousel's in-gallery swipe never touches it) and resets
+	// only on a genuine card-change (the IO active-flip). Reactive → the ♪ chip dims when paused.
+	let galleryPaused = $state(false);
+	let galleryPauseTimer: ReturnType<typeof setTimeout> | undefined;
 
 	// True iff the active card is a gallery that carries a soundtrack — the audibility predicate
 	// shared by the channel's assert + the in-gesture bless hooks.
@@ -383,7 +394,21 @@
 	// anywhere the pool's audio is re-asserted (drive, mute-toggle, foreground).
 	function assertGalleryAudio() {
 		const a = galleryAudio;
-		if (a) a.muted = !(activeGalleryHasAudio() && blessed && !muted);
+		if (a) a.muted = !(activeGalleryHasAudio() && blessed && !muted && !galleryPaused);
+	}
+	// Gallery-audio pause toggle, DEFERRED past the double-tap window (round-3 fast-follow). tapActive
+	// schedules this on a tap over an active audio-gallery; a double-tap (a LIKE) cancels it before it
+	// fires — so likes never blip the soundtrack, and a genuine single tap flips pause once the window
+	// settles. The channel keeps playing; only its muted state changes (assertGalleryAudio).
+	function scheduleGalleryPauseToggle() {
+		clearTimeout(galleryPauseTimer);
+		galleryPauseTimer = setTimeout(() => {
+			galleryPaused = !galleryPaused;
+			assertGalleryAudio();
+		}, SEQ_WINDOW_MS);
+	}
+	function cancelGalleryPauseToggle() {
+		clearTimeout(galleryPauseTimer);
 	}
 	// Drive the single gallery-audio channel to the ACTIVE card. Called at the TAIL of syncPool —
 	// AFTER driveActive has already muted the pool for a gallery-active frame — so the channel's
@@ -1022,6 +1047,11 @@
 			seqName = name;
 			seqStarred = toggleStarredActive(); // the ONE toggle (like OR unlike)
 			reconcilePlayState(seqPrePaused); // net-no-op: undo the double's play/pause churn
+			// Round-3 fast-follow: a double-tap is a LIKE, not a pause — cancel the pending
+			// gallery-pause toggle tapActive scheduled on tap-1 (and re-scheduled on tap-2). So a
+			// double-tap on an audio-gallery likes WITHOUT muting the soundtrack, and the bless-edge
+			// double-tap (tap-1=bless, tap-2=schedule) ends liked + AUDIBLE — #1540 ①/②.
+			cancelGalleryPauseToggle();
 			if (seqStarred) spawnHeart(e); // hearts only when the burst committed to LIKED
 			armSeqTimer();
 		}
@@ -1043,11 +1073,14 @@
 			blessPool();
 			return;
 		}
-		// Already blessed: play/pause is a VIDEO transport op. A gallery has no pooled <video>
-		// (activeVideo() null) → no-op here; its soundtrack keeps looping (audibility follows the
-		// feed mute via the channel), matching the video path's "tap = play/pause" only where there
-		// IS a transport.
-		if (!v) return;
+		// Already blessed, active is a GALLERY (no pooled <video>): tap = PAUSE/RESUME its soundtrack
+		// (round-3 fast-follow), mirroring the video "tap = play/pause". Deferred past the double-tap
+		// window so a double-tap-to-LIKE cancels it (no audio blip on likes). Only a gallery WITH a
+		// soundtrack has anything to toggle. onTapGesture cancels the pending toggle on a double.
+		if (!v) {
+			if (activeGalleryHasAudio()) scheduleGalleryPauseToggle();
+			return;
+		}
 		if (v.paused) {
 			activePaused = false;
 			activeBlocked = false;
@@ -1177,9 +1210,16 @@
 	// probe #3). Plain (non-reactive) — read only by sampleDebug for the overlay. -1 = not yet
 	// blessed / API absent, 0 = inactive at bless (transient activation lapsed → bad), 1 = active.
 	let debugUserActivation = -1;
+	// ?debug=1 client override (round-3 fast-follow): the DEBUG_PLAYBACK env→settings.debugPlayback
+	// path is code-correct end-to-end, but an SSR/PWA-cached bundle can serve a stale
+	// settings.debugPlayback=false. This URL override turns the overlay on CLIENT-side regardless,
+	// so device-verify (esp. the pause gaud/snd check) is always reachable without chasing the
+	// deploy/cache. Set at mount from location.search; `debugOn` is the effective gate everywhere.
+	let debugForced = $state(false);
+	const debugOn = $derived(settings.debugPlayback || debugForced);
 
 	function pushDebug(idx: number, kind: string, detail?: string) {
-		if (!settings.debugPlayback) return;
+		if (!debugOn) return;
 		debugSeq++;
 		debugLog = [...debugLog.slice(-13), `${debugSeq} ${idx}:${kind}${detail ? `(${detail})` : ''}`];
 	}
@@ -1365,6 +1405,12 @@
 							activeShowPlay = false; // 0.8.7 (#1307): overlay resets with the card; play/pause listeners re-sync
 							activeCurrentTime = 0;
 							activeDuration = 0;
+							// Round-3 fast-follow: a NEW card starts audible — gallery-pause is per-card, so
+							// clear it (+ any pending deferred toggle) on a genuine card-change (a v-swipe to a
+							// new post). It PERSISTS across in-gallery carousel FRAME-swipes because those never
+							// change activeIndex → this branch doesn't run (#1540③).
+							galleryPaused = false;
+							cancelGalleryPauseToggle();
 							activeIndex = idx;
 						}
 					}
@@ -1384,7 +1430,13 @@
 		document.addEventListener('visibilitychange', onForeground);
 		window.addEventListener('pageshow', onForeground);
 
-		if (settings.debugPlayback) {
+		// ?debug=1 override (round-3 fast-follow): OR the URL flag with the env-driven setting.
+		try {
+			debugForced = new URLSearchParams(location.search).has('debug');
+		} catch {
+			/* no location (non-browser) — leave off */
+		}
+		if (debugOn) {
 			sampleDebug();
 			debugTimer = setInterval(sampleDebug, 500);
 		}
@@ -1410,6 +1462,7 @@
 			clearTimeout(copyTimer);
 			clearTimeout(burstTimer);
 			clearTimeout(seqTimer);
+			clearTimeout(galleryPauseTimer); // round-3 fast-follow: deferred gallery-pause toggle
 			for (const t of heartTimers) clearTimeout(t);
 			clearInterval(debugTimer);
 			cancelAnimationFrame(showPlaySyncRaf);
@@ -1519,6 +1572,7 @@
 							{viewportAR}
 							{autoAdvance}
 							{muted}
+							paused={i === activeIndex && galleryPaused}
 							ontap={onTapGesture}
 							onadvance={() => scrollTo(activeIndex + 1)}
 						/>
@@ -1619,7 +1673,7 @@
 	<div class="mode-toast" role="status">Copied ID ✓</div>
 {/if}
 
-{#if settings.debugPlayback}
+{#if debugOn}
 	<div class="debug-overlay" aria-hidden="true">
 		<div class="debug-counts">{debugCounts}</div>
 		{#each debugLog as line (line)}

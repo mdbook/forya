@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.12.0 — gallery-audio pause, trackpad swipe, debug overlay override
+
+Small follow-ups to the gallery-audio feature (0.11.0), each device-verified.
+
+- **Tap to pause a gallery's soundtrack**: on a photo post with audio, a single tap
+  pauses/resumes the music (a double-tap still likes, and never blips the audio). The
+  ♪ chip dims while paused. Under the hood the audio element keeps playing (muted) so
+  it holds its iOS audio-route grant — resume is instant.
+- **Trackpad swipe**: on a laptop/desktop trackpad, a two-finger horizontal swipe now
+  pages through a gallery's images (it follows your fingers and snaps, like the touch
+  swipe); vertical still scrolls the feed.
+- **`?debug=1`**: append `?debug=1` to the URL to force the diagnostic playback overlay
+  on, independent of the `DEBUG_PLAYBACK` env (handy when a cached bundle would otherwise
+  hide it).
+
 ## 0.11.0 — gallery audio (+ crop refinement)
 
 Photo-post galleries now **play their soundtrack** — the TikTok track that ships beside the

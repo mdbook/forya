@@ -195,6 +195,35 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.12.0 — gallery-audio pause + trackpad wheel + ?debug=1 overlay
+
+Fast-follow to 0.11.0's gallery audio. All in Feed.svelte + ImageCarousel; server/types/pool untouched.
+
+- **Pause (Feed.svelte).** `galleryPaused` folds into the ONE `assertGalleryAudio` gate
+  (`… && !galleryPaused`) — purely restrictive, so it can only ADD a mute, never unmute.
+  The channel is NEVER `pause()`d (mute-only) so the per-element iOS route grant survives;
+  resume is a D-safe unmute. The toggle is DEFERRED past the double-tap window
+  (`scheduleGalleryPauseToggle`, SEQ_WINDOW_MS): a double-tap is a LIKE and cancels it
+  (`cancelGalleryPauseToggle`), so a like never blips the audio, and the bless-edge
+  double-tap ends liked+AUDIBLE. Per-card: persists across carousel frame-swipes, resets on
+  card-change (IO active-flip). ♪ chip dims via the `paused` prop. Video pool byte-untouched;
+  A2DP exactly-one-audible preserved. (Opus cure-safety audit clean; device-GREEN.)
+- **Trackpad (ImageCarousel).** A non-passive `wheel` listener: CONTINUOUS live-track —
+  `wheelPx` follows horizontal `deltaX` in real time (added to the track transform, a
+  `.wheeling` class kills the transition), CLAMPED to ±one image width so a flick's ~0.5-1s
+  momentum tail can only ever move one image. NO lock (the first cut used an
+  accumulate→step→lock that the momentum tail starved, dropping back-to-back swipes until a
+  click — #1578; the continuous model has no stuck state). `settleWheel` mirrors the
+  finger-drag's far-OR-flick: it snaps on a ~160ms idle gap by distance OR peak velocity, so
+  a decisive-but-short flick still commits one page even when the net offset is small (#1591,
+  the v3 velocity/intent-commit tune — device-GREEN "decent on desktop"). `preventDefault`
+  suppresses the browser history-swipe; bails during a finger-drag. deltaX sign → next/prev
+  is device-tuned (natural-scroll).
+- **?debug=1 (Feed.svelte).** `debugOn = settings.debugPlayback || debugForced`, where
+  `debugForced` is read once at mount from `location.search` (SSR-safe). The env→settings
+  path is code-correct; this override just sidesteps an SSR/PWA-cached bundle so the overlay
+  (gaud/snd) is reliably enable-able for device-verify.
+
 ## 0.11.0 — gallery audio (+ crop refinement)
 
 Round-3 of image galleries: the forya-side playback of a photo post's soundtrack. The load-bearing
