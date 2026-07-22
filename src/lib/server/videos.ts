@@ -20,11 +20,13 @@ const MIME_BY_EXT: Record<string, string> = {
 	// Image-gallery frames (TikTok photo posts): served by the SAME /api/media Range endpoint,
 	// so this table is where their content-type comes from — without these a frame would serve
 	// as application/octet-stream and the browser would download it instead of rendering. Videos
-	// are unaffected (their four types are unchanged). Contract A allows jpg/jpeg/png/webp.
+	// are unaffected (their four types are unchanged). Contract A allows jpg/jpeg/png/webp;
+	// v0.13.0 adds gif (reddit photo posts — browsers render it natively in <img>, no transcode).
 	'.jpg': 'image/jpeg',
 	'.jpeg': 'image/jpeg',
 	'.png': 'image/png',
 	'.webp': 'image/webp',
+	'.gif': 'image/gif',
 	// Gallery soundtracks (TikTok photo-post audio, round-3): a photo post can carry a music track
 	// saved as a bare `<id>.{m4a,mp3}` beside its `<id>_NN.*` frames. Served by the SAME /api/media
 	// Range endpoint (iOS seeks/streams audio via Range too), so its content-type belongs here
@@ -44,22 +46,39 @@ export function isVideoFile(name: string): boolean {
 	return (VIDEO_EXTENSIONS as readonly string[]).includes(path.extname(name).toLowerCase());
 }
 
-/** Contract A gallery frame: `<id>_NN.<ext>` — pure-digit post id, 2-digit zero-pad carousel
- *  index (01-based), image ext. LOCKED shape (design #1380 / gate #1381): `_NN` is ALWAYS
- *  present (a 1-image post is `<id>_01.jpg`), so grouping is unambiguous and a bare `<id>.jpg`
- *  is NOT a gallery. STRICT — a name that isn't exactly this (`7_1.jpg`, `7_001.jpg`, `7.jpg`,
- *  `foo_01.jpg`) is rejected, never best-effort grouped (gate AC-3 reject-nonmatching). The id
- *  is pure digits (validated on the tiktok-sync WRITE side too, I2), so the only `_` is the
- *  frame separator and a crafted id can't smuggle a `_NN`. */
-const FRAME_RE = /^(\d+)_(\d{2})\.(jpg|jpeg|png|webp)$/i;
+/** Contract A gallery frame: `<id>_NN.<ext>` — post id + 2-digit zero-pad carousel index
+ *  (01-based) + image ext. `_NN` is ALWAYS present for a multi-image carousel; grouping is by id.
+ *  The id STEM is `[a-z0-9]+` (v0.13.0): TikTok ids are numeric, reddit ids are base36 (letters),
+ *  and numeric ⊂ base36 so TikTok grouping is byte-identical. The FRAME NUMBER stays pure-digit
+ *  `\d{2}` — base36 has no `_`, so the `_NN` suffix is still an unambiguous separator (it, not the
+ *  stem's digit-class, is what disambiguates a frame). STILL STRICT on the index: `7_1.jpg`
+ *  (1-digit), `7_001.jpg` (3-digit) are rejected, never best-effort grouped. Path traversal is
+ *  guarded independently by `safeMediaPath` — `[a-z0-9]` excludes `/`/`\`/`.`, so the id can't
+ *  smuggle a separator. A bare `<id>.<img-ext>` (no `_NN`) is a SINGLE-image post — SINGLE_IMAGE_RE.
+ *  Ext set incl. `.gif` (v0.13.0). */
+const FRAME_RE = /^([a-z0-9]+)_(\d{2})\.(jpg|jpeg|png|webp|gif)$/i;
 
 /** Contract A gallery soundtrack: a bare pure-digit-id audio file `<id>.{m4a,mp3}` (round-3) —
  *  the same `<id>` stem as the post's `<id>_NN.*` frames. It is gallery-audio IFF matching frames
  *  exist (the disambiguator vs a stray audio file), which is enforced by only attaching it to an
- *  emitted gallery item (an id with no frames never becomes a gallery, so its audio is dropped).
- *  The id is pure digits (validated on the tiktok-sync WRITE side too, I2), disjoint from a
- *  video's `<id>.{mp4,…}` (different ext) and from a gallery's bare `<id>` name (has an ext). */
+ *  emitted MULTI-frame gallery item (an id with no frames never becomes a gallery, so its audio is
+ *  dropped). The id STAYS pure-digit `\d+` (v0.13.0 DECISION, not an oversight): only TikTok photo
+ *  posts carry a soundtrack and TikTok ids are numeric — reddit galleries have no audio, so there
+ *  is no base36 soundtrack to match. Disjoint from a video's `<id>.{mp4,…}` and a single image's
+ *  `<id>.{jpg,…}` (different ext sets). */
 const AUDIO_RE = /^(\d+)\.(m4a|mp3)$/i;
+
+/** Reddit-style single-image post (v0.13.0): a bare `<id>.<img-ext>` with NO `_NN` frame suffix —
+ *  reddit's dominant shape (a photo post is usually one image, not a carousel). Rendered as a
+ *  gallery of ONE frame: forya already has the gallery item type + a carousel that draws a 1-frame
+ *  gallery with no nav chrome, so this reuses all of it (no new item type). DISJOINT from FRAME_RE:
+ *  a frame name has a `_NN`, and the `[a-z0-9]+` stem can't cross the `_`, so `<id>_01.jpg` never
+ *  matches this and `<id>.jpg` never matches FRAME_RE. Also disjoint from a video (`<id>.<vid-ext>`)
+ *  and a soundtrack (`<id>.{m4a,mp3}`) — different ext sets. Same image ext set as FRAME_RE incl.
+ *  `.gif`. NOTE: this changes behavior for ANY bare image in ANY feed — safe because forya's posters
+ *  live under DATA_DIR/posters (poster.ts), NOT the scanned `:ro` VIDEO_DIR, and TikTok never writes
+ *  a bare image (always `_NN`), so no existing feed has stray bare images to newly surface. */
+const SINGLE_IMAGE_RE = /^([a-z0-9]+)\.(jpg|jpeg|png|webp|gif)$/i;
 
 /** Dotfiles and `.partial` (tiktok-sync's mid-download files) — mirrors erin's
  *  IGNORE_HIDDEN_PATHS. */
@@ -150,7 +169,7 @@ async function doScan(
 	const items: FeedItem[] = [];
 	// Gallery frames accumulate here by post id (Contract A grouping): one photo post = N
 	// flat `<id>_NN.<ext>` frames → ONE gallery FeedItem (design #1380, gate AC-3). Plain
-	// object; ids are pure digits (FRAME_RE). Frames never per-file stat — a gallery carries
+	// object; ids are base36-or-numeric (FRAME_RE, v0.13.0). Frames never per-file stat — a gallery carries
 	// no poster/mtime cache key, so it stays cheap even on the full-stat (poster) path.
 	const galleries: Record<string, { name: string; idx: string }[]> = {};
 	// Gallery soundtracks accumulate here by post id (round-3): a bare `<id>.{m4a,mp3}` beside the
@@ -158,6 +177,10 @@ async function doScan(
 	// disambiguator) — a stray audio whose id has no frames falls through unused, never a feed
 	// item. Never per-file stats (a gallery carries no cache key), so it stays cheap.
 	const audioById: Record<string, MediaFrame> = {};
+	// Single-image posts accumulate here by id (v0.13.0): a bare `<id>.<img-ext>` with no `_NN`
+	// (reddit's dominant shape). Emitted below as a single-frame gallery, but ONLY for an id with
+	// no multi-frame set (a post is single OR multi — defensive). Never per-file stats.
+	const singleImages: Record<string, MediaFrame> = {};
 	for (const ent of entries) {
 		if (!ent.isFile()) continue;
 		const name = ent.name;
@@ -183,6 +206,18 @@ async function doScan(
 					type: mimeFromExt(name)
 				};
 			}
+			continue;
+		}
+		// Single-image post (reddit, v0.13.0): a bare `<id>.<img-ext>` with no `_NN`. A frame
+		// (`<id>_NN.*`) already matched FRAME_RE above and continued, so this only ever sees bare
+		// images. Accumulate by id; emitted below as a single-frame gallery (reuses the item type).
+		const sm = SINGLE_IMAGE_RE.exec(name);
+		if (sm) {
+			singleImages[sm[1]] ??= {
+				name,
+				url: `/api/media/${encodeURIComponent(name)}`,
+				type: mimeFromExt(name)
+			};
 			continue;
 		}
 		if (!isVideoFile(name)) continue;
@@ -227,6 +262,18 @@ async function doScan(
 		// dropped. Absent field ⇒ audioless gallery (silent) — byte-identical to pre-round-3.
 		if (audioById[id]) item.audio = audioById[id];
 		items.push(item);
+	}
+
+	// Single-image posts → single-frame galleries (v0.13.0). Reuses the gallery item type: media[]
+	// of one frame, bare `<id>` name (same keying as a multi-frame gallery; ImageCarousel renders a
+	// 1-frame gallery with no nav chrome). Skip an id that already produced a multi-frame gallery
+	// above — a post is single OR multi, so if a bare `<id>.jpg` and `<id>_NN.*` frames somehow
+	// coexist, the multi-frame set wins and the bare image is dropped (no duplicate). Single-frame
+	// galleries carry no audio (reddit singles are silent; AUDIO_RE only binds to multi-frame ids).
+	for (const id in singleImages) {
+		if (galleries[id]) continue;
+		const frame = singleImages[id];
+		items.push({ name: id, url: frame.url, type: frame.type, media: [frame] });
 	}
 
 	// Name-asc: a stable, deterministic total order over unique filenames so SSR +

@@ -37,11 +37,12 @@ describe('mimeFromExt', () => {
 		expect(mimeFromExt('a.m4v')).toBe('video/x-m4v');
 	});
 
-	it('maps image-gallery frame extensions (Contract A)', () => {
+	it('maps image-gallery frame extensions (Contract A + v0.13.0 gif)', () => {
 		expect(mimeFromExt('7_01.jpg')).toBe('image/jpeg');
 		expect(mimeFromExt('7_01.JPEG')).toBe('image/jpeg');
 		expect(mimeFromExt('7_01.png')).toBe('image/png');
 		expect(mimeFromExt('7_01.webp')).toBe('image/webp');
+		expect(mimeFromExt('7_01.gif')).toBe('image/gif'); // v0.13.0 (reddit)
 	});
 
 	it('maps gallery soundtrack extensions (round-3 audio)', () => {
@@ -71,7 +72,8 @@ describe('scanVideos', () => {
 		await write('c.webm');
 		await write('d.m4v');
 		await write('note.txt');
-		await write('image.jpg');
+		// (a bare `image.jpg` is a single-frame gallery as of v0.13.0 — covered in the reddit
+		// block below; here we only assert that non-media junk like `note.txt` is dropped.)
 		const items = await scanVideos(dir, true);
 		expect(items.map((i) => i.name).sort()).toEqual(['a.mp4', 'b.mov', 'c.webm', 'd.m4v']);
 	});
@@ -179,14 +181,15 @@ describe('scanVideos image galleries (Contract A: <id>_NN.<ext> grouping)', () =
 		expect(items[0].media?.map((m) => m.type)).toEqual(['image/png', 'image/webp']);
 	});
 
-	it('REJECTS non-conforming names (no best-effort grouping) — gate AC-3', async () => {
-		await write('7_1.jpg'); // 1-digit index → not a frame
-		await write('7_001.jpg'); // 3-digit index → not a frame
-		await write('7.jpg'); // bare image, no _NN → not a gallery
-		await write('foo_01.jpg'); // non-digit id → not a frame
-		await write('7_01.gif'); // unsupported ext → not a frame
+	it('still REJECTS malformed frame indices (v0.13.0: the index shape stays strict)', async () => {
+		// v0.13.0 relaxed the id STEM to base36 (AC-1) and made bare images single-frame galleries
+		// (AC-2) — but the frame INDEX stays strict `_\d{2}`. These have a `_` (so not a bare single
+		// image) AND a non-2-digit index (so not a frame) → dropped, never best-effort grouped.
+		// (`7.jpg`, `foo_01.jpg`, `7_01.gif` are now VALID — see the v0.13.0 block below.)
+		await write('7_1.jpg'); // 1-digit index
+		await write('7_001.jpg'); // 3-digit index
 		const items = await scanVideos(dir, true);
-		expect(items).toEqual([]); // every one ignored, none grouped or guessed
+		expect(items).toEqual([]);
 	});
 
 	it('videos and galleries coexist; the video FeedItem shape is unchanged', async () => {
@@ -283,6 +286,88 @@ describe('scanVideos gallery soundtracks (round-3: <id>.{m4a,mp3} audio, IFF fra
 		expect(vid.media).toBeUndefined();
 		expect(items.find((i) => i.name === '200')!.audio?.name).toBe('200.m4a');
 		expect(items.find((i) => i.name === '300')!.audio).toBeUndefined();
+	});
+});
+
+describe('scanVideos reddit galleries (v0.13.0: base36 ids + single images + gif)', () => {
+	it('AC-1: groups base36-id gallery frames (reddit ids contain letters)', async () => {
+		await write('1ukez7v_01.png');
+		await write('1ukez7v_02.png');
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(1);
+		expect(items[0].name).toBe('1ukez7v');
+		expect(items[0].media?.map((m) => m.name)).toEqual(['1ukez7v_01.png', '1ukez7v_02.png']);
+	});
+
+	it('AC-1 regression: numeric TikTok ids still group byte-identically (numeric ⊂ base36)', async () => {
+		await write('700_01.jpg');
+		await write('700_02.jpg');
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(1);
+		expect(items[0].name).toBe('700');
+		expect(items[0].media).toHaveLength(2);
+	});
+
+	it('AC-2: a bare <id>.<img-ext> (no _NN) is a single-frame gallery — base36 AND numeric', async () => {
+		await write('11lmhmr.jpg'); // reddit base36 single
+		await write('123.png'); // numeric single
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(2);
+		const g1 = items.find((i) => i.name === '11lmhmr')!;
+		expect(g1.media).toEqual([
+			{ name: '11lmhmr.jpg', url: '/api/media/11lmhmr.jpg', type: 'image/jpeg' }
+		]);
+		const g2 = items.find((i) => i.name === '123')!;
+		expect(g2.media).toEqual([{ name: '123.png', url: '/api/media/123.png', type: 'image/png' }]);
+		// url/type mirror the one frame (share/info fallback), like a multi-frame gallery.
+		expect(g1.url).toBe('/api/media/11lmhmr.jpg');
+		expect(g1.type).toBe('image/jpeg');
+	});
+
+	it('AC-2: a single-frame gallery has NO audio field (reddit singles are silent)', async () => {
+		await write('abc.jpg');
+		const items = await scanVideos(dir, true);
+		expect(items[0].media).toHaveLength(1);
+		expect(items[0].audio).toBeUndefined();
+	});
+
+	it('AC-2 defensive: an id with BOTH _NN frames and a bare image → multi-frame wins, no dup', async () => {
+		await write('dup_01.jpg');
+		await write('dup_02.jpg');
+		await write('dup.jpg'); // same id, bare — must NOT create a second item
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(1);
+		expect(items[0].name).toBe('dup');
+		expect(items[0].media).toHaveLength(2); // the multi-frame set, not the bare single
+	});
+
+	it('AC-3: .gif works as a gallery frame, a bare single image, and in MIME', async () => {
+		expect(mimeFromExt('x.gif')).toBe('image/gif');
+		await write('g_01.gif'); // gif frame, mixed with a jpg frame in one gallery
+		await write('g_02.jpg');
+		await write('solo.gif'); // bare gif → single-frame gallery
+		const items = await scanVideos(dir, true);
+		const g = items.find((i) => i.name === 'g')!;
+		expect(g.media?.map((m) => m.type)).toEqual(['image/gif', 'image/jpeg']);
+		const solo = items.find((i) => i.name === 'solo')!;
+		expect(solo.media).toEqual([
+			{ name: 'solo.gif', url: '/api/media/solo.gif', type: 'image/gif' }
+		]);
+	});
+
+	it('regression: videos + junk unaffected; a bare non-image is not a false-positive gallery', async () => {
+		await write('vid.mp4'); // video: unchanged, no media[]
+		await write('note.txt'); // junk: not an image ext → dropped
+		await write('7_1.jpg'); // malformed index (has `_`) → not a single image, dropped
+		const items = await scanVideos(dir, true);
+		expect(items.map((i) => i.name).sort()).toEqual(['vid.mp4']);
+		expect(items.find((i) => i.name === 'vid.mp4')!.media).toBeUndefined();
+	});
+
+	it('base36 gallery frame flows through safeMediaPath (I2 read-side unchanged)', () => {
+		expect(safeMediaPath('1ukez7v_01.png', dir)).toBe(
+			path.join(path.resolve(dir), '1ukez7v_01.png')
+		);
 	});
 });
 
