@@ -195,6 +195,38 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.13.0 — reddit galleries (base36 ids + single-image posts + gif)
+
+reddit-sync (a sibling ingester) writes reddit photo saves under the same on-disk shape as
+tiktok-sync, but reddit's data has three shapes forya's TikTok-tuned scanner didn't read. All
+three fixes are in `src/lib/server/videos.ts` (the dir scan) ONLY — no Feed / ImageCarousel /
+types / share change; the render layer already handled everything (a 1-frame gallery already
+ships for TikTok 1-image posts, and `ImageCarousel` drops its nav chrome for `frames.length < 2`).
+
+- **AC-1 — base36 gallery ids.** `FRAME_RE` stem relaxed `\d+` → `[a-z0-9]+`. The FRAME NUMBER
+  stays strict `_\d{2}` — base36 has no `_`, so the `_NN` suffix (not the id's digit-class) is what
+  disambiguates a frame. numeric ⊂ base36, so TikTok grouping is byte-identical (a regression test
+  proves it, and review counted `+0/-0` on the real liked/best/favorite dirs). Path traversal is
+  still guarded independently by `safeMediaPath` — `[a-z0-9]` can't smuggle a `/`/`\`/`.`.
+- **AC-2 — single-image posts.** New `SINGLE_IMAGE_RE = /^([a-z0-9]+)\.(img-ext)$/i`: a bare
+  `<id>.<ext>` with no `_NN` becomes a single-frame gallery (reddit's dominant shape — 455 of the
+  1900-file fixture). Disjoint from `FRAME_RE` by construction (the `[a-z0-9]+` stem can't cross the
+  `_`, so a frame name never matches this and a bare name never matches `FRAME_RE`). An id with BOTH
+  a bare image and `_NN` frames → the multi-frame set wins, the bare image is dropped (no duplicate).
+  This changes behavior for ANY bare image in ANY feed — SAFE because forya's posters live under
+  `DATA_DIR/posters` (`poster.ts`), NOT the scanned `:ro` VIDEO_DIR, and TikTok never writes a bare
+  image (always `_NN`); review proved zero stray-image surfacing on the real dirs.
+- **AC-3 — gif.** `.gif` → `image/gif` in `MIME_BY_EXT` + the `FRAME_RE` and `SINGLE_IMAGE_RE` ext
+  sets. Browsers render gif natively in `<img>` (no transcode); operator device-verified
+  gif-in-carousel on-device.
+- **AUDIO_RE stays `\d+`** (a DECISION, not an oversight): only TikTok posts carry a soundtrack and
+  TikTok ids are numeric; reddit galleries have no audio. Single-frame galleries carry no audio.
+
+Ships in lockstep with reddit-sync's ingester (`dev-initial`), which was frozen (RED-held on the
+read-side contract) until this deployed. **Known follow-up (post-0.13.0, NOT a regression):** the
+desktop/wide-aspect crop heuristic still sometimes cuts content — pre-existing 0.11.0 crop-arc
+behavior, flagged at the v0.13.0 device-verify; queued for triage.
+
 ## 0.12.0 — gallery-audio pause + trackpad wheel + ?debug=1 overlay
 
 Fast-follow to 0.11.0's gallery audio. All in Feed.svelte + ImageCarousel; server/types/pool untouched.

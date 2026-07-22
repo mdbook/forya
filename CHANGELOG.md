@@ -4,6 +4,24 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.13.0 — reddit galleries (base36 ids, single-image posts, gif)
+
+forya now reads **reddit** photo posts, not just TikTok's. A sibling ingester lays reddit saves
+on disk under the same on-disk contract; this teaches forya's scanner to see them — with zero
+frontend change (they render through the same carousel).
+
+- **Base36 post ids**: a gallery frame's id can now contain letters (reddit uses base36 ids like
+  `1ukez7v`), not just digits. TikTok's numeric galleries are unchanged — a numeric id is just a
+  subset, so their grouping is byte-identical.
+- **Single-image posts**: a bare `<id>.<ext>` image (reddit's most common shape — one photo, no
+  carousel) now shows as a single-frame gallery, reusing the existing carousel (no nav chrome for
+  a lone image). Previously a bare image was dropped.
+- **Animated gif**: `.gif` is now a supported image type — as a gallery frame or a single image —
+  rendered natively by the browser (no transcode).
+- Videos, TikTok galleries, and gallery soundtracks are untouched: the change is confined to the
+  directory scanner (the Range byte-serving path is byte-identical), and it adds/removes **zero**
+  items on the existing feeds.
+
 ## 0.12.0 — gallery-audio pause, trackpad swipe, debug overlay override
 
 Small follow-ups to the gallery-audio feature (0.11.0), each device-verified.

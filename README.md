@@ -49,10 +49,11 @@ serving backend. See [`handoff.md`](./handoff.md) for the full story.
   to favorite it; the heart fills on clips you've already liked. Long-press the
   heart to open a **Favorites view** (`/liked`): your liked clips as a feed,
   newest first. Persisted as a small `starred.json`; inert when no data volume.
-- **Image galleries** (TikTok photo posts): multi-image posts render as swipeable
+- **Image galleries** (TikTok + reddit photo posts): photo posts render as swipeable
   carousels alongside videos — finger-follow drag, index dots/counter, double-tap
-  to like, and a full-carousel share link. One photo post = one feed item (flat
-  `<id>_NN.<ext>` frames grouped by id). A gallery with a soundtrack (`<id>.{m4a,mp3}`
+  to like, and a full-carousel share link. One photo post = one feed item — a
+  multi-image carousel (`<id>_NN.<ext>` frames) or a single image (`<id>.<ext>`), with a
+  numeric (TikTok) or base36 (reddit) id, and `.gif` renders natively. A gallery with a soundtrack (`<id>.{m4a,mp3}`
   beside its frames) **plays it, looping and mute-respecting** (a ♪ chip marks it; tap
   to pause). Swipe by touch or a two-finger trackpad gesture; off-aspect photos
   letterbox instead of over-cropping. Galleries never touch the
