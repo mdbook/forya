@@ -4,6 +4,33 @@ Gotchas, decisions, and load-bearing context that aren't obvious from the code.
 Add to this when you discover something painful so the next agent doesn't
 re-derive it.
 
+## Library layout (v0.14.0): the reader is layout-agnostic
+
+forya's scanner reads **flat AND structured** layouts, per item, permanently — the operator chose
+"support both, don't force a migration" (`library-layout` design). Load-bearing points:
+
+- **Grouping key ≠ identity key.** A gallery's frames are UNIONED by the bare `<id>` (the grouping key)
+  across every layout, deduped by 2-digit index (nested-wins). But a VIDEO's identity is its full
+  basename `<id>.<ext>`, NOT the bare id — do NOT "unify" them, or every video's starred/hidden/share
+  record re-keys and orphans (a real review catch, #1777). A video and a same-`<id>` gallery are two
+  distinct items by design.
+- **Public frame name is normalized to the flat form** `<id>_NN.<ext>` even when the file physically
+  lives at `galleries/<id>/NN.<ext>`. That keeps the URL/identity layout-independent; the serve side
+  (`resolveMediaCandidates` in `videos.ts`) maps the normalized name back to the bytes via a bounded,
+  root-FIRST, containment-checked probe. Root-first matters: a flat feed resolves on the first lstat =
+  zero regression.
+- **Auto-detect, no config knob.** The scanner descends `galleries/`/`videos/` only if those dirents
+  exist, so a pure-flat feed does one readdir and pays nothing (the 0.7.0 cheap-scan is preserved — the
+  favorite tripwire). There is deliberately NO `LAYOUT=` env.
+- **Cheap-scan is load-bearing, so classification stays by EXTENSION, not content-sniff.** Sniffing a
+  container's magic bytes = a per-file read = exactly the I/O the readdir-only scan avoids. If gallery-dl
+  ext-drift ever drops a file, the fix is sniff-ONLY-unrecognized-ext (a bounded fast-follow), not a full
+  sniff.
+- **Fast-follows deferred (not in 0.14.0):** (1) content-sniff for ext-drift; (2) posters for NESTED
+  videos (the poster route still uses the flat `safeMediaPath` guard → a nested video gets no poster,
+  graceful; couple this to the first nested-video write opt-in). Nested WRITE support + the flat→nested
+  migration runbook are ingester-side + operator-scheduled.
+
 ## Why this rewrite exists
 
 forya replaces `erin` (`mosswill/erin`, a Caddy file-server + React feed) which

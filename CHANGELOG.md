@@ -4,6 +4,30 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.14.0 — library layout: layout-agnostic reader
+
+forya's directory scanner + media serving are now **layout-agnostic**: a feed can keep the flat
+all-in-one-dir layout it has today, OR organize into typed subfolders (`videos/`, `galleries/<id>/`),
+OR mix them — per item, indefinitely. Nothing has to move; re-organizing a library is optional and
+operator-scheduled. (Operator-directed permanent-dual-layout milestone; design + gates on the
+`library-layout` thread.)
+
+- **Reads flat AND structured.** A gallery's frames are grouped by the bare post `<id>` whether they
+  live flat in the root (`<id>_NN.<ext>`), loose under a `galleries/` subdir, or nested per-post in
+  `galleries/<id>/NN.<ext>`; videos read from the root or a `videos/` subdir. The layout is
+  auto-detected — a pure-flat feed pays **zero** extra scan cost (the 0.7.0 readdir-only cheap-scan is
+  preserved), and there is no config knob.
+- **Stable identity across layouts.** A frame's public name/URL is normalized to the flat form
+  `<id>_NN.<ext>` regardless of where it physically lives, so a file moving flat↔nested keeps the same
+  URL and the same starred/hidden/share key — **zero re-keying**. A video keeps its full-basename
+  identity (`<id>.<ext>`), so a video and a same-`<id>` gallery stay two distinct items.
+- **Range serving unchanged.** The media endpoint resolves a name to its physical location via a
+  bounded, containment-checked probe (root → `galleries/` → nested → `videos/`), preserving the
+  symlink reject and the HTTP Range contract byte-for-byte. Flat feeds resolve on the first probe.
+- **No behavior change on existing feeds.** Every current feed is flat, so its output is byte-identical
+  (device-verified on the best canary). Migrating a library to subfolders, and the fast-follows
+  (content-sniff for extension drift; posters for nested videos), are separate operator-scheduled steps.
+
 ## 0.13.0 — reddit galleries (base36 ids, single-image posts, gif)
 
 forya now reads **reddit** photo posts, not just TikTok's. A sibling ingester lays reddit saves
