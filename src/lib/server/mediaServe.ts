@@ -12,29 +12,41 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { config } from './config';
-import { mimeFromExt, resolveRange, safeMediaPath, weakETag } from './videos';
+import { mimeFromExt, resolveMediaCandidates, resolveRange, weakETag } from './videos';
+
+/**
+ * Layout-agnostic resolve (v0.14.0): probe the ordered candidate paths for `name` (root → `galleries/`-flat
+ * → nested `galleries/<id>/` → `videos/`, from `resolveMediaCandidates`) and return the FIRST that is a real
+ * regular (non-symlink) file, or `null` if none. Manifest-independent, so a cold/warming container still
+ * serves (AC8). Shared by the byte serve (404 on null) and the poster routes (204 on null).
+ *
+ * The load-bearing symlink reject (adversarial #1) is PRESERVED and, if anything, stronger: a planted
+ * symlink (`clip.mp4 -> /etc/passwd`) is `lstat`'d — `isSymbolicLink()` true → the candidate is SKIPPED
+ * (never followed), and the probe moves on; if only the symlink exists, all candidates fail → the caller
+ * 404s. `lstat` (not `stat`) also means a real regular file's `st` === `stat`, so the size/mtime feeding
+ * resolveRange/weakETag stay byte-identical (serving-four unchanged; this is route-level resolution only).
+ */
+export async function lstatMediaFile(
+	name: string,
+	videoDir: string = config.videoDir
+): Promise<{ full: string; st: fs.Stats } | null> {
+	for (const full of resolveMediaCandidates(name, videoDir)) {
+		let st: fs.Stats;
+		try {
+			st = await fsp.lstat(full);
+		} catch {
+			continue; // this candidate doesn't exist — try the next
+		}
+		if (st.isSymbolicLink() || !st.isFile()) continue; // symlink/dir/etc — never serve; try the next
+		return { full, st };
+	}
+	return null;
+}
 
 export async function statFile(name: string, videoDir: string = config.videoDir) {
-	const full = safeMediaPath(name, videoDir);
-	if (full === null) error(404, 'not found'); // traversal / bad name → no leak
-	let st: fs.Stats;
-	try {
-		// lstat, NOT stat (adversarial #1): `stat` FOLLOWS a symlink, so a planted
-		// `clip.mp4 -> /etc/passwd` (an in-dir NAME whose TARGET escapes VIDEO_DIR) would
-		// pass the purely-lexical `safeMediaPath` and the byte path would stream the
-		// out-of-dir file with full Range support. `lstat` stats the LINK itself, so the
-		// symlink check below rejects it. Mirrors the poster route's F7 guard; the feed
-		// scan already excludes symlinks (videos.ts), so no legitimate item is one.
-		st = await fsp.lstat(full);
-	} catch {
-		error(404, 'not found');
-	}
-	// Regular file only — reject symlinks (and dirs/sockets/etc.) so the byte path can
-	// never follow a link out of the `:ro` VIDEO_DIR. For a regular file `lstat` === `stat`,
-	// so the size/mtime that feed resolveRange/weakETag/baseHeaders below are unchanged
-	// (serving-four stays byte-identical; this is a route-level guard, not a math change).
-	if (st.isSymbolicLink() || !st.isFile()) error(404, 'not found');
-	return { full, st };
+	const found = await lstatMediaFile(name, videoDir);
+	if (found === null) error(404, 'not found'); // traversal / bad name / no candidate → no leak
+	return found;
 }
 
 function baseHeaders(name: string, st: fs.Stats): Record<string, string> {
