@@ -244,6 +244,45 @@ describe('GET|HEAD /api/media/[name]', () => {
 		}
 	});
 
+	it('v0.14.0: serves a NESTED galleries/<id>/NN.<ext> frame by its normalized name (probe)', async () => {
+		const gdir = path.join(VIDEO_DIR, 'galleries', 'g1');
+		await fsp.mkdir(gdir, { recursive: true });
+		const buf = Buffer.alloc(SIZE);
+		for (let i = 0; i < SIZE; i++) buf[i] = (i + 7) % 251;
+		await fsp.writeFile(path.join(gdir, '01.jpg'), buf); // physical: galleries/g1/01.jpg
+		try {
+			// full 200 — the probe finds the nested file from the flat-form public name g1_01.jpg
+			const full = (await GET(event('g1_01.jpg'))) as Response;
+			expect(full.status).toBe(200);
+			expect(full.headers.get('content-type')).toBe('image/jpeg');
+			expect(full.headers.get('content-length')).toBe(String(SIZE));
+			// Range 206 works through the probe-resolved nested path (Range contract intact)
+			const part = (await GET(event('g1_01.jpg', { range: 'bytes=0-1' }))) as Response;
+			expect(part.status).toBe(206);
+			expect(part.headers.get('content-range')).toBe(`bytes 0-1/${SIZE}`);
+			expect(Array.from(new Uint8Array(await part.arrayBuffer()))).toEqual([7, 8]);
+		} finally {
+			await fsp.rm(path.join(VIDEO_DIR, 'galleries'), { recursive: true, force: true });
+		}
+	});
+
+	it('v0.14.0: a symlink at a NESTED candidate is lstat-rejected → 404 (AC4 nested guard)', async () => {
+		const outside = path.join(process.cwd(), 'tests', '.tmp-outside2');
+		await fsp.mkdir(outside, { recursive: true });
+		const secret = path.join(outside, 'secret.txt');
+		await fsp.writeFile(secret, 'must never stream');
+		const gdir = path.join(VIDEO_DIR, 'galleries', 'g2');
+		await fsp.mkdir(gdir, { recursive: true });
+		await fsp.symlink(secret, path.join(gdir, '01.jpg')); // nested name, target escapes VIDEO_DIR
+		try {
+			await expect(GET(event('g2_01.jpg'))).rejects.toMatchObject({ status: 404 });
+			await expect(HEAD(event('g2_01.jpg'))).rejects.toMatchObject({ status: 404 });
+		} finally {
+			await fsp.rm(path.join(VIDEO_DIR, 'galleries'), { recursive: true, force: true });
+			await fsp.rm(outside, { recursive: true, force: true });
+		}
+	});
+
 	// 0.7.0: the cheap (readdir-only) feed manifest now OMITS size/mtime on poster-
 	// off feeds, so the byte-serve path must stay wholly independent of the manifest
 	// — it computes every header from the file's OWN stat. These lock that contract

@@ -9,6 +9,7 @@ import {
 	getFeed,
 	isVideoFile,
 	mimeFromExt,
+	resolveMediaCandidates,
 	safeMediaPath,
 	scanVideos,
 	seededShuffle
@@ -27,6 +28,13 @@ afterEach(async () => {
 
 async function write(name: string, bytes = 10) {
 	await fsp.writeFile(path.join(dir, name), Buffer.alloc(bytes));
+}
+
+// Write a file at a (possibly nested) subpath under the temp dir, creating parent dirs (v0.14.0).
+async function writeIn(subpath: string, bytes = 10) {
+	const full = path.join(dir, subpath);
+	await fsp.mkdir(path.dirname(full), { recursive: true });
+	await fsp.writeFile(full, Buffer.alloc(bytes));
 }
 
 describe('mimeFromExt', () => {
@@ -489,5 +497,153 @@ describe('seededShuffle', () => {
 		const out = seededShuffle(input, 7);
 		expect(out.slice().sort((a, b) => a - b)).toEqual(input);
 		expect(input[0]).toBe(0); // input untouched
+	});
+});
+
+describe('scanVideos layout-agnostic (v0.14.0: flat + galleries/-flat + nested galleries/<id>/ + videos/)', () => {
+	const byName = (items: Awaited<ReturnType<typeof scanVideos>>, name: string) =>
+		items.find((i) => i.name === name);
+
+	it('nested galleries/<id>/NN.<ext> → one item, frame names normalized to <id>_NN.<ext>', async () => {
+		await writeIn('galleries/7/01.jpg');
+		await writeIn('galleries/7/02.jpg');
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(1);
+		expect(items[0].name).toBe('7');
+		expect(items[0].media?.map((f) => f.name)).toEqual(['7_01.jpg', '7_02.jpg']);
+		expect(items[0].media?.[0].url).toBe('/api/media/7_01.jpg');
+		expect(items[0].media?.[0].type).toBe('image/jpeg');
+	});
+
+	it('galleries/-flat <id>_NN.<ext> → one gallery item', async () => {
+		await writeIn('galleries/9_01.jpg');
+		await writeIn('galleries/9_02.png');
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(1);
+		expect(items[0].name).toBe('9');
+		expect(items[0].media?.map((f) => f.name)).toEqual(['9_01.jpg', '9_02.png']);
+	});
+
+	it('videos/ subdir → video item keyed by full basename', async () => {
+		await writeIn('videos/v1.mp4');
+		const items = await scanVideos(dir, true);
+		expect(items.map((i) => i.name)).toEqual(['v1.mp4']);
+		expect(items[0].media).toBeUndefined();
+	});
+
+	it('AC6: a video + a same-<id> gallery are TWO distinct items (video keyed by <id>.<ext>, NOT re-keyed)', async () => {
+		await write('7.mp4'); // flat video, identity 7.mp4
+		await writeIn('galleries/7/01.jpg'); // nested gallery, identity bare 7
+		const items = await scanVideos(dir, true);
+		expect(items.map((i) => i.name).sort()).toEqual(['7', '7.mp4']);
+		expect(byName(items, '7.mp4')?.media).toBeUndefined();
+		expect(byName(items, '7')?.media).toHaveLength(1);
+	});
+
+	it('AC9: union across layouts — root <id>_NN + nested <id>/NN merge into ONE deduped gallery', async () => {
+		await write('8_01.jpg'); // root frame 01
+		await writeIn('galleries/8/02.jpg'); // nested frame 02
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(1);
+		expect(items[0].name).toBe('8');
+		expect(items[0].media?.map((f) => f.name)).toEqual(['8_01.jpg', '8_02.jpg']);
+	});
+
+	it('AC9: same index in two layouts dedups nested-wins (ONE frame at that index)', async () => {
+		await write('8_01.jpg'); // root frame 01 (jpg)
+		await writeIn('galleries/8/01.png'); // nested frame 01 (png) — SAME index
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(1);
+		expect(items[0].media).toHaveLength(1); // deduped to one frame at index 01
+		expect(items[0].media?.[0].name).toBe('8_01.png'); // nested-wins → the .png
+	});
+
+	it('nested soundtrack galleries/<id>/<id>.m4a attaches IFF frames', async () => {
+		await writeIn('galleries/13/01.jpg');
+		await writeIn('galleries/13/13.m4a');
+		const items = await scanVideos(dir, true);
+		expect(items).toHaveLength(1);
+		expect(items[0].audio?.name).toBe('13.m4a');
+		expect(items[0].audio?.type).toBe('audio/mp4');
+	});
+
+	it('frame-less orphan audio is DROPPED under both layouts (tiktok #1785 attach-iff-frames)', async () => {
+		await write('12.m4a'); // flat orphan audio, no 12_NN frames
+		await writeIn('galleries/11/11.m4a'); // nested orphan audio, no frames in the dir
+		await writeIn('galleries/10/01.jpg'); // a real gallery (control)
+		await writeIn('galleries/10/10.mp3');
+		const items = await scanVideos(dir, true);
+		expect(items.map((i) => i.name)).toEqual(['10']); // only the real gallery survives
+		expect(byName(items, '10')?.audio?.name).toBe('10.mp3');
+	});
+
+	it('a nested subdir with a non-id name (ID_RE fail) is skipped', async () => {
+		await writeIn('galleries/a.b/01.jpg'); // dot in id → ID_RE rejects
+		const items = await scanVideos(dir, true);
+		expect(items).toEqual([]);
+	});
+
+	it('AC13: a pure-flat library is unaffected (no galleries//videos/ → pre-v0.14.0 behavior)', async () => {
+		await write('a.mp4');
+		await write('7_01.jpg');
+		await write('7_02.jpg');
+		const items = await scanVideos(dir, true);
+		expect(items.map((i) => i.name).sort()).toEqual(['7', 'a.mp4']);
+	});
+});
+
+describe('resolveMediaCandidates (v0.14.0 layout-agnostic serve resolution)', () => {
+	const R = () => path.resolve(dir);
+
+	it('frame name → root, galleries-flat, nested (probe order: root first)', () => {
+		expect(resolveMediaCandidates('7_01.jpg', dir)).toEqual([
+			path.join(R(), '7_01.jpg'),
+			path.join(R(), 'galleries', '7_01.jpg'),
+			path.join(R(), 'galleries', '7', '01.jpg')
+		]);
+	});
+
+	it('video name → root, videos/', () => {
+		expect(resolveMediaCandidates('7.mp4', dir)).toEqual([
+			path.join(R(), '7.mp4'),
+			path.join(R(), 'videos', '7.mp4')
+		]);
+	});
+
+	it('soundtrack name → root, galleries-flat, nested-in-dir', () => {
+		expect(resolveMediaCandidates('7.m4a', dir)).toEqual([
+			path.join(R(), '7.m4a'),
+			path.join(R(), 'galleries', '7.m4a'),
+			path.join(R(), 'galleries', '7', '7.m4a')
+		]);
+	});
+
+	it('single image name → root, galleries-flat', () => {
+		expect(resolveMediaCandidates('7.jpg', dir)).toEqual([
+			path.join(R(), '7.jpg'),
+			path.join(R(), 'galleries', '7.jpg')
+		]);
+	});
+
+	it('AC4/M1: rejects separators / traversal / NUL → [] (no candidate)', () => {
+		expect(resolveMediaCandidates('../../etc/passwd', dir)).toEqual([]);
+		expect(resolveMediaCandidates('a/b.jpg', dir)).toEqual([]);
+		expect(resolveMediaCandidates('a\\b.jpg', dir)).toEqual([]);
+		expect(resolveMediaCandidates('..', dir)).toEqual([]);
+		expect(resolveMediaCandidates('foo\0.jpg', dir)).toEqual([]);
+		expect(resolveMediaCandidates('', dir)).toEqual([]);
+	});
+
+	it('AC4: every candidate stays strictly under the root', () => {
+		const root = path.resolve(dir);
+		for (const name of ['7_01.jpg', '7.mp4', '7.m4a', '7.jpg', 'abc123.webm', 'note.txt']) {
+			for (const c of resolveMediaCandidates(name, dir)) {
+				expect(c === root || c.startsWith(root + path.sep)).toBe(true);
+			}
+		}
+	});
+
+	it('unknown shape → root candidate only', () => {
+		expect(resolveMediaCandidates('note.txt', dir)).toEqual([path.join(R(), 'note.txt')]);
 	});
 });
