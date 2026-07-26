@@ -12,6 +12,7 @@
 	// AND double-tap-to-zoom is disabled (the pan-y version let iOS's zoom recognizer break
 	// double-tap-spam + cancel mid-swipe, #1442). No feed-scroll hijack.
 	import { pickFit, GALLERY_MAX_COVER_RATIO } from '$lib/fit';
+	import { nextGalleryStep } from '$lib/gallery';
 	import type { FeedItem } from '$lib/types';
 	import Music from '@lucide/svelte/icons/music';
 
@@ -55,16 +56,30 @@
 	const hasAudio = $derived(!!item.audio);
 	let index = $state(0);
 
-	// Auto-advance (opt-in): a gallery has no <video> 'ended' to drive the feed, so without this
-	// the feed DEAD-ENDS on the first photo post when AUTO_ADVANCE is on. An idle dwell advances
-	// the feed; it RESTARTS on every frame change (`index`), so an actively-swiping user is never
-	// yanked away — the feed only moves on after DWELL of no interaction. Active-only; cleared on
-	// deactivate by the effect's own teardown. (Dwell is generous + device-tunable.)
-	const AUTO_ADVANCE_DWELL_MS = 8000;
+	// Auto-cycle: the idle dwell steps through the gallery's own FRAMES and advances the FEED only
+	// off the LAST frame — so feed-autoscroll can no longer leave a photo post having shown just
+	// its cover (a gallery has no <video> 'ended' to drive the feed, so this dwell is the whole
+	// mechanism). The policy lives in `nextGalleryStep` (pure, truth-tabled in tests/gallery.test.ts);
+	// this effect is only the wiring. Reading `index` here makes the effect RESTART on every frame
+	// change — manual swipe or auto-step alike — so an actively-swiping user is never yanked away
+	// and each auto-step naturally re-arms the next. Active-only; the teardown clears any in-flight
+	// timer on deactivate or on any input change.
 	$effect(() => {
-		if (!active || !autoAdvance || frames.length === 0) return;
-		void index; // restart the dwell whenever the frame changes (manual swipe or reset)
-		const t = setTimeout(() => onadvance?.(), AUTO_ADVANCE_DWELL_MS);
+		const step = nextGalleryStep({
+			active,
+			autoAdvance,
+			// §3 WIRING (design gate, pending review): passing `paused` here adopts the recommended
+			// "one paused concept per post" — a paused post holds its images too. If review instead
+			// scopes pause to the soundtrack only, this becomes `held: false` and nothing else moves.
+			held: paused,
+			index,
+			frameCount: frames.length
+		});
+		if (step.kind === 'none') return;
+		const t = setTimeout(
+			() => (step.kind === 'feed' ? onadvance?.() : go(index + 1)),
+			step.delayMs
+		);
 		return () => clearTimeout(t);
 	});
 
