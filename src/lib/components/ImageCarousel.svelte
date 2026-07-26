@@ -68,9 +68,10 @@
 		const step = nextGalleryStep({
 			active,
 			autoAdvance,
-			// §3 WIRING (design gate, pending review): passing `paused` here adopts the recommended
-			// "one paused concept per post" — a paused post holds its images too. If review instead
-			// scopes pause to the soundtrack only, this becomes `held: false` and nothing else moves.
+			// ONE PAUSED CONCEPT PER POST: a paused post holds its images too, so tap = pause stops
+			// the soundtrack, the GIF and this cycle together (mirrors the video tap = play/pause).
+			// This is a real semantic change from round-3, where `paused` only muted audio and the
+			// feed still advanced after the dwell.
 			held: paused,
 			index,
 			frameCount: frames.length
@@ -141,9 +142,12 @@
 		// The <img> is this canvas's sibling inside `.frame` — read it off the DOM rather than
 		// threading per-index element bindings through the {#each} for one transient snapshot.
 		const img = c?.parentElement?.querySelector('img');
-		// naturalWidth is 0 until decode; if we're early the canvas simply stays blank this run and
-		// the effect re-runs when `index`/`paused` next change. Same-origin (/api/media) so the
-		// canvas is never tainted.
+		// naturalWidth is 0 until decode. If we're early the canvas stays TRANSPARENT — the GIF
+		// keeps animating underneath and the pause silently appears not to take. It does NOT
+		// self-heal: the effect only re-runs when `index`/`paused` change, i.e. the user must
+		// re-tap. Benign (an undrawn canvas is transparent, not a black box, and you have to be
+		// looking at the GIF to tap it) so it stays unguarded rather than growing a decode-wait.
+		// Same-origin (/api/media), so the canvas is never tainted.
 		if (!c || !img || !img.naturalWidth) return;
 		c.width = img.naturalWidth;
 		c.height = img.naturalHeight;

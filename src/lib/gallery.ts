@@ -41,12 +41,11 @@ export interface GalleryStepInput {
 	autoAdvance: boolean;
 	/** This post is HELD by the user ⇒ neither frames nor the feed advance.
 	 *
-	 *  NOTE (design gate §3, pending review): what the component feeds this is exactly the open
-	 *  question. Under the recommended "one paused concept per post" it is the existing
-	 *  `galleryPaused` (tap = pause the post: soundtrack + GIF + cycle). Under the alternatives
-	 *  it stays `false` and pausing the soundtrack leaves the images cycling. Either way the
-	 *  DECISION below is unchanged — only the wiring differs, which is why this milestone's
-	 *  logic could be built before that call is made. */
+	 *  Fed by `galleryPaused`: a tap pauses the POST, not just one medium — soundtrack, GIF
+	 *  animation and this auto-cycle all stop together, mirroring the video path's tap =
+	 *  play/pause. The tap only *arms* on a gallery with audio or a GIF (Feed's trigger), so a
+	 *  plain photo gallery is never held; see that trigger for why widening it would create an
+	 *  invisible paused state. */
 	held: boolean;
 	/** Current frame index (0-based). */
 	index: number;
