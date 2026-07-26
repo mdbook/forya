@@ -32,6 +32,7 @@
 	import Copy from '@lucide/svelte/icons/copy';
 	import Heart from '@lucide/svelte/icons/heart';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
+	import { hasGifFrame } from '$lib/gallery';
 	import type { FeedItem, FeedSettings } from '$lib/types';
 	import {
 		saveMute,
@@ -222,6 +223,14 @@
 	// shared by the channel's assert + the in-gesture bless hooks.
 	function activeGalleryHasAudio(): boolean {
 		return !!(activeItem?.media && activeItem.audio);
+	}
+
+	// True iff the active card is a gallery containing a GIF frame — the OTHER thing a tap can
+	// pause. Separate from the audio predicate because a GIF post is usually AUDIOLESS: gating
+	// the pause toggle on a soundtrack alone leaves the tap dead on exactly the content
+	// "GIFs pause on tap" was asked for (review #2199).
+	function activeGalleryHasGif(): boolean {
+		return hasGifFrame(activeItem?.media);
 	}
 
 	function slotForName(name: string): number {
@@ -1073,12 +1082,18 @@
 			blessPool();
 			return;
 		}
-		// Already blessed, active is a GALLERY (no pooled <video>): tap = PAUSE/RESUME its soundtrack
-		// (round-3 fast-follow), mirroring the video "tap = play/pause". Deferred past the double-tap
-		// window so a double-tap-to-LIKE cancels it (no audio blip on likes). Only a gallery WITH a
-		// soundtrack has anything to toggle. onTapGesture cancels the pending toggle on a double.
+		// Already blessed, active is a GALLERY (no pooled <video>): tap = PAUSE/RESUME THE POST,
+		// mirroring the video "tap = play/pause". Deferred past the double-tap window so a
+		// double-tap-to-LIKE cancels it (no blip on likes); onTapGesture cancels the pending toggle.
+		//
+		// The trigger is AUDIO **or** GIF, and deliberately not "every gallery" (review #2199):
+		//  • audio gallery → pauses the soundtrack (and now holds the cycle); the ♪ chip shows it.
+		//  • GIF gallery → freezes the GIF, and the freeze IS the feedback — no chip needed.
+		//  • plain photo gallery → unchanged NO-OP. Widening to all galleries would let a stray tap
+		//    pause INVISIBLY (the ♪ chip only renders `{#if hasAudio}`) and, since `paused` also
+		//    gates the auto-cycle, silently halt autoscroll with nothing on screen explaining why.
 		if (!v) {
-			if (activeGalleryHasAudio()) scheduleGalleryPauseToggle();
+			if (activeGalleryHasAudio() || activeGalleryHasGif()) scheduleGalleryPauseToggle();
 			return;
 		}
 		if (v.paused) {

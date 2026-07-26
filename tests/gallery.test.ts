@@ -5,6 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import {
 	FEED_DWELL_MS,
+	GIF_MIME,
+	hasGifFrame,
 	IMAGE_DWELL_MS,
 	nextGalleryStep,
 	type GalleryStepInput
@@ -95,5 +97,34 @@ describe('nextGalleryStep', () => {
 			kind: 'feed',
 			delayMs: FEED_DWELL_MS
 		});
+	});
+});
+
+// This predicate gates the pause TRIGGER, not just rendering. The regression it guards is
+// review #2199: gating "tap = pause" on a soundtrack alone left the tap dead on an AUDIOLESS
+// GIF post — the overwhelming majority — so the headline feature would have shipped as a no-op
+// on exactly the content it was asked for, while device-verifying GREEN on an audio gallery.
+describe('hasGifFrame', () => {
+	it('detects a lone GIF frame — the AUDIOLESS single-GIF post (the shipped-dead regression)', () => {
+		expect(hasGifFrame([{ type: GIF_MIME }])).toBe(true);
+	});
+
+	it('detects a GIF among still frames (mixed gallery)', () => {
+		expect(hasGifFrame([{ type: 'image/jpeg' }, { type: GIF_MIME }, { type: 'image/png' }])).toBe(
+			true
+		);
+	});
+
+	it('is false for a plain photo gallery — which must keep its no-op tap', () => {
+		expect(hasGifFrame([{ type: 'image/jpeg' }, { type: 'image/webp' }])).toBe(false);
+	});
+
+	it('is false for an empty or absent media list (a video item has none)', () => {
+		expect(hasGifFrame([])).toBe(false);
+		expect(hasGifFrame(undefined)).toBe(false);
+	});
+
+	it('does not match a look-alike MIME', () => {
+		expect(hasGifFrame([{ type: 'image/gifv' }, { type: 'video/gif' }])).toBe(false);
 	});
 });

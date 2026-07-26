@@ -20,6 +20,20 @@ export const IMAGE_DWELL_MS = 3500;
  *  dwell value, preserved so single-image posts behave exactly as they did before. */
 export const FEED_DWELL_MS = 8000;
 
+/** MIME of an animated GIF frame. v0.13.0 made a bare `<id>.gif` a single-frame gallery
+ *  (reddit's shape), rendered as a plain `<img>` — there is no transcode and no `<video>`. */
+export const GIF_MIME = 'image/gif';
+
+/** Does this gallery contain a GIF frame?
+ *
+ *  Load-bearing for the pause TRIGGER, not just for rendering: a GIF post is usually
+ *  audioless, so gating "tap = pause" on a soundtrack alone leaves the tap dead on exactly
+ *  the content the feature was asked for (review #2199). Structurally typed so this module
+ *  stays dependency-free. */
+export function hasGifFrame(frames: readonly { type: string }[] | undefined): boolean {
+	return !!frames?.some((f) => f.type === GIF_MIME);
+}
+
 export interface GalleryStepInput {
 	/** This card is the active (in-viewport) one. Only the active gallery ever auto-cycles. */
 	active: boolean;

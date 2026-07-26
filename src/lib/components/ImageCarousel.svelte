@@ -12,7 +12,7 @@
 	// AND double-tap-to-zoom is disabled (the pan-y version let iOS's zoom recognizer break
 	// double-tap-spam + cancel mid-swipe, #1442). No feed-scroll hijack.
 	import { pickFit, GALLERY_MAX_COVER_RATIO } from '$lib/fit';
-	import { nextGalleryStep } from '$lib/gallery';
+	import { GIF_MIME, nextGalleryStep } from '$lib/gallery';
 	import type { FeedItem } from '$lib/types';
 	import Music from '@lucide/svelte/icons/music';
 
@@ -115,6 +115,39 @@
 			el.removeEventListener('wheel', onWheel);
 			clearTimeout(wheelTimer);
 		};
+	});
+
+	// GIF FREEZE. Browsers expose NO pause API for an animated GIF in an <img> — no .pause(), no
+	// animation-play-state — so "pause the GIF" has to be a picture of the GIF. We overlay a canvas
+	// holding the frame that was on screen at the moment of pause.
+	//
+	// ponytail: the <img> keeps animating underneath the canvas, so FREEZE is exact but RESUME
+	// jumps to the live position instead of continuing from the frozen frame. Invisible for the
+	// actual use case (stop a loop so you can look at it); the only way to fix it is to own a GIF
+	// decoder (gifuct + manual frame stepping), which is a dependency and a decoder to maintain in
+	// exchange for a pause button. Upgrade path if it ever matters, not before.
+	//
+	// GEOMETRY (review #2199): the canvas carries the SAME CSS box and the SAME fit class as the
+	// <img> and is sized to the image's NATURAL dimensions, so the browser applies an identical
+	// object-fit to both and the freeze is geometrically a no-op. Drawing at ELEMENT size instead
+	// would visibly jump/rescale at the moment of pause on exactly the crop-heavy posts that
+	// motivated GALLERY_MAX_COVER_RATIO.
+	const frozen = $derived(active && paused && frames[index]?.type === GIF_MIME);
+	let frozenCanvas = $state<HTMLCanvasElement>();
+
+	$effect(() => {
+		if (!frozen) return;
+		const c = frozenCanvas;
+		// The <img> is this canvas's sibling inside `.frame` — read it off the DOM rather than
+		// threading per-index element bindings through the {#each} for one transient snapshot.
+		const img = c?.parentElement?.querySelector('img');
+		// naturalWidth is 0 until decode; if we're early the canvas simply stays blank this run and
+		// the effect re-runs when `index`/`paused` next change. Same-origin (/api/media) so the
+		// canvas is never tainted.
+		if (!c || !img || !img.naturalWidth) return;
+		c.width = img.naturalWidth;
+		c.height = img.naturalHeight;
+		c.getContext('2d')?.drawImage(img, 0, 0);
 	});
 
 	function go(next: number) {
@@ -353,6 +386,12 @@
 							draggable="false"
 							onload={(e) => onImgLoad(i, e)}
 						/>
+						{#if frozen && i === index}
+							<!-- Frozen GIF frame. Same fit class + same absolute box as the <img> above, sized
+							     to natural dims in the effect, so the swap is geometrically invisible.
+							     Decorative: the <img> underneath still carries the alt text. -->
+							<canvas class={fitClass(i)} bind:this={frozenCanvas} aria-hidden="true"></canvas>
+						{/if}
 					{/if}
 				</div>
 			{/each}
@@ -446,7 +485,12 @@
 		height: 100%;
 	}
 
-	.frame img {
+	/* The frozen-GIF canvas is styled IDENTICALLY to the <img> it covers (same box, same fit) —
+	   that identity is what makes the freeze geometrically a no-op, so these selectors must stay
+	   paired. `canvas` is a replaced element, so object-fit applies to it exactly as it does to
+	   an image. z-index keeps it above the still-animating <img> underneath. */
+	.frame img,
+	.frame canvas {
 		position: absolute;
 		inset: 0;
 		width: 100%;
@@ -457,8 +501,13 @@
 		user-select: none;
 	}
 
-	.frame img.contain {
+	.frame img.contain,
+	.frame canvas.contain {
 		object-fit: contain;
+	}
+
+	.frame canvas {
+		z-index: 1;
 	}
 
 	/* Discrete prev/next controls (accessible click + keyboard). Vertically centered edge chips,
