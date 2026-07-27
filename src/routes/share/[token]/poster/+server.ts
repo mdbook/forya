@@ -38,6 +38,7 @@ async function handle(token: string): Promise<Response> {
 		headers: {
 			'content-type': 'image/jpeg',
 			'content-length': String(poster.length),
+			'x-content-type-options': 'nosniff', // unauth og:image — no MIME-sniff off the bytes (S1)
 			'cache-control': 'private, no-store',
 			'referrer-policy': 'no-referrer'
 		}

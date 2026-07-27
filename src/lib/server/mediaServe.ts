@@ -53,6 +53,10 @@ function baseHeaders(name: string, st: fs.Stats): Record<string, string> {
 	return {
 		'accept-ranges': 'bytes',
 		'content-type': mimeFromExt(name),
+		// A name that resolves but isn't a known media ext serves as application/octet-stream;
+		// this surface is also reachable UNAUTH via /share/<token>/media, so forbid MIME-sniffing
+		// so the browser can never reinterpret those bytes as an executable content type (S1).
+		'x-content-type-options': 'nosniff',
 		'last-modified': st.mtime.toUTCString(),
 		etag: weakETag(st.size, st.mtimeMs),
 		// Purely additive: lets the browser reuse already-fetched bytes when
