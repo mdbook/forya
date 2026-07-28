@@ -30,9 +30,14 @@ export function ratioForCropCap(crop: number): number {
 	return 1 / (1 - crop);
 }
 
-/** Default ratio threshold, derived from MAX_COVER_CROP. Was a hand-tuned 1.8 (video,
- *  ~44% max crop) / 1.4 (gallery, ~28%) through round-3; now pinned to the 10% crop
- *  cap ⇒ ≈1.111. Kept exported (and as pickFit's default) so call sites are unchanged. */
+/** Ratio threshold for the DEFAULT crop cap. Was a hand-tuned 1.8 (video, ~44% max crop) /
+ *  1.4 (gallery, ~28%) through round-3; now derived from MAX_COVER_CROP ⇒ ≈1.111.
+ *
+ *  ⚠️ THIS IS THE FALLBACK DEFAULT, NEVER THE EFFECTIVE VALUE. Since the crop cap became an
+ *  operator dial (MAX_COVER_CROP → config → settings), the live threshold is whatever Feed
+ *  derives from settings and threads to each call site. Use this only where no settings are
+ *  reachable (tests, a default for a fresh config) — never as "the" ratio. It used to be the
+ *  truth; it is now a build-time snapshot of one particular cap. */
 export const MAX_COVER_RATIO = ratioForCropCap(MAX_COVER_CROP);
 
 /** Fraction of the media `cover` WOULD crop at these dims (0 = none). `contain` crops
@@ -52,7 +57,12 @@ export function pickFit(
 	videoWidth: number,
 	videoHeight: number,
 	viewportAR: number,
-	maxCoverRatio: number = MAX_COVER_RATIO
+	/** REQUIRED ON PURPOSE (review #2269). It defaulted to MAX_COVER_RATIO while that constant
+	 *  was the truth; once the cap became an operator dial, a defaulted arg meant a new call
+	 *  site would silently pin itself to 0.10 forever and NOTHING would fail — not tsc, not
+	 *  svelte-check, not the suite. Requiring it makes tsc enforce the threading, so the
+	 *  guarantee belongs to the compiler instead of to whoever remembers this comment. */
+	maxCoverRatio: number
 ): 'cover' | 'contain' {
 	if (!videoWidth || !videoHeight || !viewportAR) return 'cover';
 	const r = videoWidth / videoHeight / viewportAR;

@@ -60,7 +60,7 @@ describe('pickFit — the ≤MAX_COVER_CROP bound (THE proof)', () => {
 	it('at the exact cap boundary it still fills (cover), just at the cap', () => {
 		// r = R = 1/(1−cap): crop is exactly the cap → the inclusive side is 'cover'. Use the raw
 		// float ratio (not the integer-rounded dims()) so the boundary is exact.
-		expect(pickFit(MAX_COVER_RATIO, 1, 1)).toBe('cover');
+		expect(pickFit(MAX_COVER_RATIO, 1, 1, MAX_COVER_RATIO)).toBe('cover');
 		expect(coverCropFraction(MAX_COVER_RATIO, 1, 1)).toBeCloseTo(MAX_COVER_CROP, 6);
 	});
 });
@@ -74,59 +74,59 @@ describe('pickFit — the fix is load-bearing (old thresholds VIOLATED the bound
 		expect(pickFit(w, h, PHONE, 1.8)).toBe('cover'); // OLD video decision
 		expect(coverCropFraction(w, h, PHONE)).toBeGreaterThan(0.15); // ~18% cropped
 		expect(coverCropFraction(w, h, PHONE)).toBeGreaterThan(MAX_COVER_CROP); // over the cap
-		expect(pickFit(w, h, PHONE)).toBe('contain'); // shipped: letterbox + blur-fill
+		expect(pickFit(w, h, PHONE, MAX_COVER_RATIO)).toBe('contain'); // shipped: letterbox + blur-fill
 	});
 
 	it('the pre-fix 1.4 gallery threshold also cover-cropped 9:16 photos over the cap', () => {
 		const [w, h] = dims(V_PORTRAIT);
 		expect(pickFit(w, h, PHONE, 1.4)).toBe('cover'); // OLD gallery decision
 		expect(coverCropFraction(w, h, PHONE)).toBeGreaterThan(MAX_COVER_CROP);
-		expect(pickFit(w, h, PHONE)).toBe('contain'); // shipped
+		expect(pickFit(w, h, PHONE, MAX_COVER_RATIO)).toBe('contain'); // shipped
 	});
 });
 
 describe('pickFit — decisions', () => {
 	it('fills (cover) an exact aspect match (0% crop)', () => {
-		expect(pickFit(...dims(PHONE), PHONE)).toBe('cover');
-		expect(pickFit(...dims(DESKTOP), DESKTOP)).toBe('cover');
+		expect(pickFit(...dims(PHONE), PHONE, MAX_COVER_RATIO)).toBe('cover');
+		expect(pickFit(...dims(DESKTOP), DESKTOP, MAX_COVER_RATIO)).toBe('cover');
 	});
 
 	it('fills a mild off-aspect within the cap (≤10% crop stays cover)', () => {
 		// r = 1.08 → ~7.4% crop, under the 10% cap → cover.
 		const [w, h] = dims(1.08);
 		expect(coverCropFraction(w, h, 1)).toBeLessThan(MAX_COVER_CROP);
-		expect(pickFit(w, h, 1)).toBe('cover');
+		expect(pickFit(w, h, 1, MAX_COVER_RATIO)).toBe('cover');
 	});
 
 	it('letterboxes a normal 9:16 clip on a portrait phone (~18% crop > cap)', () => {
-		expect(pickFit(...dims(V_PORTRAIT), PHONE)).toBe('contain');
+		expect(pickFit(...dims(V_PORTRAIT), PHONE, MAX_COVER_RATIO)).toBe('contain');
 	});
 
 	it('letterboxes a horizontal clip on a portrait phone', () => {
-		expect(pickFit(...dims(V_LANDSCAPE), PHONE)).toBe('contain');
+		expect(pickFit(...dims(V_LANDSCAPE), PHONE, MAX_COVER_RATIO)).toBe('contain');
 	});
 
 	it('letterboxes a vertical clip on a landscape display (the middle-third bug)', () => {
-		expect(pickFit(...dims(V_PORTRAIT), DESKTOP)).toBe('contain');
+		expect(pickFit(...dims(V_PORTRAIT), DESKTOP, MAX_COVER_RATIO)).toBe('contain');
 	});
 
 	it('fills (cover) a horizontal clip on a landscape display', () => {
-		expect(pickFit(...dims(V_LANDSCAPE), DESKTOP)).toBe('cover');
+		expect(pickFit(...dims(V_LANDSCAPE), DESKTOP, MAX_COVER_RATIO)).toBe('cover');
 	});
 
 	it('letterboxes a square clip on a tall phone', () => {
-		expect(pickFit(1000, 1000, PHONE)).toBe('contain');
+		expect(pickFit(1000, 1000, PHONE, MAX_COVER_RATIO)).toBe('contain');
 	});
 
 	it('letterboxes common photo aspects on a phone (4:5, 3:4, square) — whole photo shown', () => {
-		expect(pickFit(...dims(4 / 5), PHONE)).toBe('contain'); // r≈1.73
-		expect(pickFit(...dims(3 / 4), PHONE)).toBe('contain'); // r≈1.63
-		expect(pickFit(1000, 1000, PHONE)).toBe('contain'); // r≈2.17
+		expect(pickFit(...dims(4 / 5), PHONE, MAX_COVER_RATIO)).toBe('contain'); // r≈1.73
+		expect(pickFit(...dims(3 / 4), PHONE, MAX_COVER_RATIO)).toBe('contain'); // r≈1.63
+		expect(pickFit(1000, 1000, PHONE, MAX_COVER_RATIO)).toBe('contain'); // r≈2.17
 	});
 
 	it('defaults to cover when dimensions or viewport are unknown', () => {
-		expect(pickFit(0, 0, PHONE)).toBe('cover');
-		expect(pickFit(1080, 1920, 0)).toBe('cover');
+		expect(pickFit(0, 0, PHONE, MAX_COVER_RATIO)).toBe('cover');
+		expect(pickFit(1080, 1920, 0, MAX_COVER_RATIO)).toBe('cover');
 	});
 });
 
