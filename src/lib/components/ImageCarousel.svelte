@@ -135,13 +135,25 @@
 	// motivated GALLERY_MAX_COVER_RATIO.
 	const frozen = $derived(active && paused && frames[index]?.type === GIF_MIME);
 	let frozenCanvas = $state<HTMLCanvasElement>();
+	// Second snapshot for the LETTERBOXED case. The blurred bg-fill is a copy of the SAME live
+	// frame, and the main frozen canvas is `contain`-boxed, so it covers only the letterboxed
+	// middle — without this the surrounding blur KEEPS ANIMATING while the post is "paused"
+	// (review #2262). Not an edge case: any frame whose cover-crop exceeds the cap letterboxes,
+	// so at a tight cap this is the COMMON path for a GIF. Mounted only when contained.
+	let frozenBgCanvas = $state<HTMLCanvasElement>();
 
 	$effect(() => {
 		if (!frozen) return;
 		const c = frozenCanvas;
 		// The <img> is this canvas's sibling inside `.frame` — read it off the DOM rather than
 		// threading per-index element bindings through the {#each} for one transient snapshot.
-		const img = c?.parentElement?.querySelector('img');
+		// `:not(.bg-fill)` selects the REAL frame: since da40225 the bg-fill copy is the FIRST
+		// <img> in `.frame`, and a bare `querySelector('img')` would take it. That happens to be
+		// harmless today (same src ⇒ same natural dims ⇒ same pixels) but only by luck — pin the
+		// real one so a future change to the bg source can't silently corrupt the snapshot.
+		// Explicit generic: TS infers HTMLImageElement from a bare tag selector, but the `:not()`
+		// degrades it to Element, so the element type has to be stated.
+		const img = c?.parentElement?.querySelector<HTMLImageElement>('img:not(.bg-fill)');
 		// naturalWidth is 0 until decode. If we're early the canvas stays TRANSPARENT — the GIF
 		// keeps animating underneath and the pause silently appears not to take. It does NOT
 		// self-heal: the effect only re-runs when `index`/`paused` change, i.e. the user must
@@ -149,9 +161,14 @@
 		// looking at the GIF to tap it) so it stays unguarded rather than growing a decode-wait.
 		// Same-origin (/api/media), so the canvas is never tainted.
 		if (!c || !img || !img.naturalWidth) return;
-		c.width = img.naturalWidth;
-		c.height = img.naturalHeight;
-		c.getContext('2d')?.drawImage(img, 0, 0);
+		// Both snapshots come from the SAME <img> in the same run, so the frozen middle and the
+		// frozen blur can never show different moments of the GIF.
+		for (const target of [c, frozenBgCanvas]) {
+			if (!target) continue;
+			target.width = img.naturalWidth;
+			target.height = img.naturalHeight;
+			target.getContext('2d')?.drawImage(img, 0, 0);
+		}
 	});
 
 	function go(next: number) {
@@ -389,6 +406,14 @@
 							     for a contained frame (under cover it'd be fully occluded), so a filling
 							     frame pays nothing. Decorative; the real <img> below carries the alt text. -->
 							<img class="bg-fill" src={frame.url} alt="" aria-hidden="true" draggable="false" />
+							{#if frozen && i === index}
+								<!-- Frozen copy of the bg-fill. The one above is the LIVE frame, so on a paused
+								     GIF it would keep animating around the frozen middle. Same `.bg-fill` class
+								     (so it inherits the scale/blur/dim and z-index:0 — `.frame .bg-fill` outranks
+								     `.frame canvas`) and placed immediately AFTER it, so DOM order paints it over
+								     the live copy while both stay under the real <img>. -->
+								<canvas class="bg-fill" bind:this={frozenBgCanvas} aria-hidden="true"></canvas>
+							{/if}
 						{/if}
 						<img
 							class={fitClass(i)}
