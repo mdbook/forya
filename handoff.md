@@ -4,6 +4,39 @@ Gotchas, decisions, and load-bearing context that aren't obvious from the code.
 Add to this when you discover something painful so the next agent doesn't
 re-derive it.
 
+## Crop cap + GIF pause (v0.15.0)
+
+**`MAX_COVER_CROP` is the ONE crop knob and it is an operator dial.** The old pair of hand-tuned
+ratios (`1.8` video ≈ 44% crop, `1.4` gallery ≈ 28%) is gone; there is a single cap, default
+**0.10**, and `MAX_COVER_RATIO = 1/(1-cap)` is _derived_. `cover` is chosen iff `1/R ≤ r ≤ R`, so
+at either boundary the crop is exactly the cap — the bound is tight, not approximate.
+
+- **Set it at runtime, not build time**: `MAX_COVER_CROP` env → `config` → `FeedSettings` → Feed
+  derives the ratio ONCE and threads it to every `pickFit` call site. Compose change + container
+  cycle, **no rebuild**. Clamped `[0, 0.9]`: **at cap ≥ 1 the derived ratio is infinite, so nothing
+  ever letterboxes and the cap silently stops existing** — the worst failure mode for a knob like
+  this, hence the clamp.
+- **`pickFit`'s `maxCoverRatio` is REQUIRED on purpose.** It used to default to `MAX_COVER_RATIO`,
+  which was correct while that constant _was_ the truth. Once the cap became a dial, a defaulted
+  arg meant a new call site would silently pin itself to 0.10 forever and **nothing would fail**.
+  Requiring it puts the guarantee in `tsc`. `MAX_COVER_RATIO` is now the **fallback default, never
+  the effective value** — use it only where no settings are reachable.
+- **Picking a number**: a standard 9:16 clip needs ≈18% (9:19.5 phone), 20% (9:20), 24% (9:21) to
+  stay full-bleed, so **0.18–0.20 is device-dependent** and ~**0.24** covers all common phones.
+  Photos/squares need ~38–54% and letterbox at any sane cap — which is the intent.
+
+**GIF pause has a known, accepted ceiling.** There is no pause API for an animated GIF in `<img>`,
+so pausing overlays a canvas snapshot. The `<img>` keeps animating underneath ⇒ **freeze is exact,
+resume jumps to the live position.** Fixing that means owning a GIF decoder; not worth a dependency
+for a pause button. A letterboxed GIF needs TWO snapshots (frame + blurred bg-fill), drawn from the
+same `<img>` in the same effect run so they can never show different moments. If the GIF has not
+decoded yet the canvas stays transparent and the pause appears not to take — it recovers on a
+**re-tap**, not on its own.
+
+**The pause TRIGGER is has-audio OR has-gif, deliberately not every gallery.** The ♪ chip only
+renders `{#if hasAudio}`, so a plain photo gallery would pause **invisibly** — and since `paused`
+also gates the auto-cycle, it would silently halt autoscroll with nothing on screen explaining why.
+
 ## Library layout (v0.14.0): the reader is layout-agnostic
 
 forya's scanner reads **flat AND structured** layouts, per item, permanently — the operator chose
