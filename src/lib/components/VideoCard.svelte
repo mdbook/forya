@@ -16,6 +16,7 @@
 		item,
 		active,
 		viewportAR,
+		maxCoverRatio,
 		posters,
 		revealed,
 		buffering,
@@ -33,6 +34,9 @@
 		/** Viewport aspect ratio (w/h), reactive — drives object-fit so the card
 		 *  re-letterboxes on rotate/resize. */
 		viewportAR: number;
+		/** Cover/contain ratio threshold, derived by Feed from the operator's MAX_COVER_CROP
+		 *  dial. Passed in rather than imported so every fit decision uses ONE value. */
+		maxCoverRatio: number;
 		/** Generated posters available (DATA_DIR on) — gate the `/api/poster` request. */
 		posters: boolean;
 		/** Feed: this card's parked pooled `<video>` has painted (reached `playing`) →
@@ -68,7 +72,7 @@
 	// the element); here we only need it for the poster image.
 	const fitW = $derived(item.width || 0);
 	const fitH = $derived(item.height || 0);
-	const fit = $derived(pickFit(fitW, fitH, viewportAR));
+	const fit = $derived(pickFit(fitW, fitH, viewportAR, maxCoverRatio));
 
 	// Poster (0.5/M3): shown in the placeholder until the video reveals. Requested only
 	// when the feature is on; `posterOk` gates display to a SUCCESSFUL load so a 204/error

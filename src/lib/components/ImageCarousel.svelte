@@ -20,6 +20,7 @@
 		item,
 		active,
 		viewportAR,
+		maxCoverRatio,
 		autoAdvance = false,
 		muted = true,
 		paused = false,
@@ -31,6 +32,9 @@
 		active: boolean;
 		/** Viewport aspect ratio (w/h), reactive — drives per-frame object-fit on rotate/resize. */
 		viewportAR: number;
+		/** Cover/contain ratio threshold, derived by Feed from the operator's MAX_COVER_CROP dial.
+		 *  Passed in rather than imported so every fit decision in the app uses ONE value. */
+		maxCoverRatio: number;
 		/** Feed's auto-advance mode — when on, an idle gallery advances the FEED after a dwell. */
 		autoAdvance?: boolean;
 		/** Feed mute pref (round-3). Only drives the soundtrack CHIP's audible/emphasis state — the
@@ -198,7 +202,7 @@
 		// Crop cap (2026-07-28): one MAX_COVER_CROP (~10%) for photos AND video — a frame whose
 		// cover-crop would exceed the cap letterboxes (whole frame shown) with a blurred bg-fill
 		// behind it instead of losing a chunk. Supersedes the round-3 #1526 gallery-only 1.4 split.
-		return nd && pickFit(nd.w, nd.h, viewportAR) === 'contain' ? 'contain' : '';
+		return nd && pickFit(nd.w, nd.h, viewportAR, maxCoverRatio) === 'contain' ? 'contain' : '';
 	}
 
 	// Interactive finger-follow drag (TikTok-style): the track tracks the finger in REAL TIME the

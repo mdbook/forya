@@ -42,7 +42,7 @@
 		saveAutoAdvance
 	} from '$lib/stores/prefs';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
-	import { pickFit } from '$lib/fit';
+	import { pickFit, ratioForCropCap } from '$lib/fit';
 	import { isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
 	import { nearestVideos, reassignPool } from '$lib/pool';
 
@@ -216,6 +216,12 @@
 	// M6-reconcile: the flip simply never happens on a double. Per-card: it persists across carousel
 	// FRAME-swipes (Feed-level state; ImageCarousel's in-gallery swipe never touches it) and resets
 	// only on a genuine card-change (the IO active-flip). Reactive → the ♪ chip dims when paused.
+	// The crop cap is an operator dial (MAX_COVER_CROP → settings), so the ratio threshold is
+	// derived HERE once and handed to every fit decision — the pooled <video> below plus
+	// VideoCard's poster and ImageCarousel's frames — rather than each site importing the
+	// build-time default. `$derived` so a settings change would flow without a reload.
+	const maxCoverRatio = $derived(ratioForCropCap(settings.maxCoverCrop));
+
 	let galleryPaused = $state(false);
 	let galleryPauseTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -268,7 +274,7 @@
 	function applyFit(v: HTMLVideoElement, item: FeedItem, useElementDims = true) {
 		const ew = useElementDims ? v.videoWidth : 0;
 		const eh = useElementDims ? v.videoHeight : 0;
-		const f = pickFit(ew || item.width || 0, eh || item.height || 0, viewportAR);
+		const f = pickFit(ew || item.width || 0, eh || item.height || 0, viewportAR, maxCoverRatio);
 		v.classList.toggle('contain', f === 'contain');
 	}
 
@@ -1585,6 +1591,7 @@
 							{item}
 							active={i === activeIndex}
 							{viewportAR}
+							{maxCoverRatio}
 							{autoAdvance}
 							{muted}
 							paused={i === activeIndex && galleryPaused}
@@ -1596,6 +1603,7 @@
 							{item}
 							active={i === activeIndex}
 							{viewportAR}
+							{maxCoverRatio}
 							posters={settings.posters}
 							revealed={revealedByName[item.name] ?? false}
 							buffering={i === activeIndex && activeBuffering}

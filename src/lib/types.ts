@@ -79,6 +79,11 @@ export interface FeedSettings {
 	preloadBehind: number;
 	/** Initial autoplay-next preference (AUTO_ADVANCE). */
 	autoAdvance: boolean;
+	/** Max fraction of a clip/photo `cover` may crop before it letterboxes (MAX_COVER_CROP,
+	 *  default 0.10, clamped [0, 0.9] server-side). Runtime-tunable so the ≤10%-crop vs
+	 *  full-bleed-9:16 (~0.19-0.24) tradeoff is an operator dial, not a rebuild. The client
+	 *  converts it to the ratio threshold via `ratioForCropCap`. */
+	maxCoverCrop: number;
 	/** Whether generated posters are available (the POSTERS feature on — DATA_DIR set
 	 *  AND POSTERS opt-in, 0.5/re-gated 0.8.0). When false the client never requests
 	 *  `/api/poster`, so a disabled instance makes no extra requests. */
