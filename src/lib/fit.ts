@@ -1,29 +1,52 @@
 // Object-fit decision for a clip in the feed. Pure so it's unit-testable.
 //
-// `cover` (fill, edge-to-edge) while the clip's aspect is close to the
-// viewport's; `contain` (letterbox) once they diverge far enough that `cover`
-// would crop a big chunk — in EITHER direction:
-//   - a landscape clip on a portrait phone   → side-cropped   → contain
+// `cover` (fill, edge-to-edge) only while cropping ≤ MAX_COVER_CROP of the media;
+// past that we `contain` (letterbox, ZERO crop) and paint a blurred background-fill
+// behind it (VideoCard / ImageCarousel) so a letterboxed clip reads like a TikTok/IG
+// reel, not black bars. Guards BOTH crop directions:
+//   - a landscape clip on a portrait phone   → side-cropped       → contain
 //   - a portrait clip on a landscape display  → top/bottom-cropped → contain
-// A normal 9:16 clip on a phone (ratio ~1.2) stays `cover`; clearly-off aspects
-// (16:9 → ~3.9, 9:16-on-desktop → ~0.32) letterbox.
+// A near-aspect clip (within the cap) still fills; only genuinely off-aspect media
+// letterboxes.
+//
+// THE CROP MATH (what the bound test in tests/fit.test.ts proves). `cover` scales the
+// media to fill the box and crops the overflow. With r = mediaAR / viewportAR the
+// cropped fraction is 1 − min(r, 1/r) — all width when r>1, all height when r<1. It's
+// 0 at r=1 and rises monotonically with |log r|. So "crop ≤ cap" ⇔ min(r,1/r) ≥ 1−cap
+// ⇔ r ∈ [1−cap, 1/(1−cap)]. We gate with a single symmetric ratio R = 1/(1−cap) (the
+// tighter, r>1 bound) and test 1/R ≤ r ≤ R: at EITHER boundary the crop is exactly
+// `cap`, so `cover` NEVER crops more than the cap.
 
-/** Default ratio threshold: how far the clip/viewport aspect ratio may diverge
- *  (in either direction) before we letterbox instead of fill. Tuned for VIDEO —
- *  TikTok clips are near-always 9:16, so at ~1.8 a normal clip fills and only a
- *  genuinely off-aspect one letterboxes. At the threshold, `cover` crops up to
- *  ~1-1/1.8 ≈ 44% of the long edge. */
-export const MAX_COVER_RATIO = 1.8;
+/** THE tunable: max fraction of a clip/photo that `cover` may crop before we
+ *  letterbox (+ blur-fill) instead. Operator rule (2026-07-28): up to ~10%. One knob
+ *  for BOTH the video pool and the gallery (the old 1.8/1.4 split collapsed to this —
+ *  a single cap is what the operator wants, and gallery photos are no longer harmed by
+ *  the video default because there IS no separate video default anymore). Device-
+ *  tunable: dial 0.05–0.15 to taste; everything downstream derives from this. */
+export const MAX_COVER_CROP = 0.1;
 
-/** Tighter threshold for GALLERY photo frames (round-3 crop fix, #1526). Photo
- *  posts carry varied aspects (3:4, 4:5, square, landscape) — not the uniform 9:16
- *  of videos — so the video default over-crops them ("cuts out a lot of the image"):
- *  a 4:5 photo on a tall phone is r≈1.74 → still `cover` at 1.8 → ~42% cropped. At
- *  1.4 it letterboxes instead, capping cover-crop at ~1-1/1.4 ≈ 28% (users would
- *  rather see the whole photo than lose a third of it — the TikTok/IG photo default).
- *  Applied ONLY by ImageCarousel via pickFit's maxCoverRatio param; the video pool
- *  keeps MAX_COVER_RATIO untouched. Device-tunable. */
-export const GALLERY_MAX_COVER_RATIO = 1.4;
+/** Ratio threshold for a crop cap: R = 1/(1−cap). `cover` iff 1/R ≤ r ≤ R. */
+export function ratioForCropCap(crop: number): number {
+	return 1 / (1 - crop);
+}
+
+/** Default ratio threshold, derived from MAX_COVER_CROP. Was a hand-tuned 1.8 (video,
+ *  ~44% max crop) / 1.4 (gallery, ~28%) through round-3; now pinned to the 10% crop
+ *  cap ⇒ ≈1.111. Kept exported (and as pickFit's default) so call sites are unchanged. */
+export const MAX_COVER_RATIO = ratioForCropCap(MAX_COVER_CROP);
+
+/** Fraction of the media `cover` WOULD crop at these dims (0 = none). `contain` crops
+ *  nothing, so this only bites when pickFit returns 'cover'. Exposed for the bound test
+ *  and for callers that want to decide whether to paint the blur-fill. */
+export function coverCropFraction(
+	videoWidth: number,
+	videoHeight: number,
+	viewportAR: number
+): number {
+	if (!videoWidth || !videoHeight || !viewportAR) return 0;
+	const r = videoWidth / videoHeight / viewportAR;
+	return 1 - Math.min(r, 1 / r);
+}
 
 export function pickFit(
 	videoWidth: number,

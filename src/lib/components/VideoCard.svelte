@@ -143,6 +143,23 @@
 </script>
 
 <div class="media">
+	<!-- Blurred background-fill behind a LETTERBOXED video (TikTok/IG-reels look): a scaled,
+	     heavily-blurred copy of the poster frame. Reuses the SAME cached poster URL as the
+	     placeholder below — NO second <video> decode, no extra network fetch (the poster is a
+	     single still, not a live duplicate). Mounted only when the video letterboxes
+	     (fit==='contain') and posters are on; under cover it'd be fully occluded, so a filling
+	     card pays nothing. Sits under the pooled <video> (z-index:0). Decorative. -->
+	{#if posterUrl && fit === 'contain'}
+		<img
+			class="bg-fill"
+			class:shown={posterOk}
+			src={posterUrl}
+			alt=""
+			aria-hidden="true"
+			onload={() => (posterOk = true)}
+		/>
+	{/if}
+
 	<!-- Slot: Feed parks the pooled <video> here (absolutely positioned to fill .media).
 	     The reveal cross-fade is driven by Feed toggling the element's own `revealed`
 	     class in lockstep with the placeholder fade below (gated on `revealed`). -->
@@ -221,6 +238,28 @@
 	.slot {
 		position: absolute;
 		inset: 0;
+	}
+
+	/* Blurred bg-fill behind a letterboxed video (TikTok/IG-reels look). A still, scaled,
+	   heavily-blurred poster frame — z-index:0 keeps it UNDER the pooled <video> (parked in
+	   .slot) and the placeholder. Scale hides the blur's soft edges; brightness dims it so the
+	   real contained video stays the focus. Fades in on load. Device-tunable (blur / dim). */
+	.bg-fill {
+		position: absolute;
+		inset: 0;
+		z-index: 0;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		transform: scale(1.15);
+		filter: blur(28px) brightness(0.6);
+		opacity: 0;
+		transition: opacity 0.25s ease;
+		pointer-events: none;
+	}
+
+	.bg-fill.shown {
+		opacity: 1;
 	}
 
 	.placeholder {

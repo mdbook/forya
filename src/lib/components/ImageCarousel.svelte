@@ -11,7 +11,7 @@
 	// (feed scroll) — there's no horizontal-scroll ancestor so our JS finger-drag owns horizontal —
 	// AND double-tap-to-zoom is disabled (the pan-y version let iOS's zoom recognizer break
 	// double-tap-spam + cancel mid-swipe, #1442). No feed-scroll hijack.
-	import { pickFit, GALLERY_MAX_COVER_RATIO } from '$lib/fit';
+	import { pickFit } from '$lib/fit';
 	import { GIF_MIME, nextGalleryStep } from '$lib/gallery';
 	import type { FeedItem } from '$lib/types';
 	import Music from '@lucide/svelte/icons/music';
@@ -178,11 +178,10 @@
 	}
 	function fitClass(i: number): '' | 'contain' {
 		const nd = natural[i];
-		// Round-3 crop fix (#1526): photos use the tighter GALLERY threshold so wide/square frames
-		// letterbox (show whole) instead of cover-cropping ~40% off. Videos keep the 1.8 default.
-		return nd && pickFit(nd.w, nd.h, viewportAR, GALLERY_MAX_COVER_RATIO) === 'contain'
-			? 'contain'
-			: '';
+		// Crop cap (2026-07-28): one MAX_COVER_CROP (~10%) for photos AND video — a frame whose
+		// cover-crop would exceed the cap letterboxes (whole frame shown) with a blurred bg-fill
+		// behind it instead of losing a chunk. Supersedes the round-3 #1526 gallery-only 1.4 split.
+		return nd && pickFit(nd.w, nd.h, viewportAR) === 'contain' ? 'contain' : '';
 	}
 
 	// Interactive finger-follow drag (TikTok-style): the track tracks the finger in REAL TIME the
@@ -383,6 +382,14 @@
 			{#each frames as frame, i (frame.name)}
 				<div class="frame">
 					{#if shouldLoad(i)}
+						{#if fitClass(i) === 'contain'}
+							<!-- Blurred background-fill behind a LETTERBOXED frame (TikTok/IG-reels look):
+							     a scaled, heavily-blurred copy of the SAME image — served from cache (same
+							     src as the real <img>), no extra network, no second decoder. Only mounted
+							     for a contained frame (under cover it'd be fully occluded), so a filling
+							     frame pays nothing. Decorative; the real <img> below carries the alt text. -->
+							<img class="bg-fill" src={frame.url} alt="" aria-hidden="true" draggable="false" />
+						{/if}
 						<img
 							class={fitClass(i)}
 							src={frame.url}
@@ -508,6 +515,17 @@
 	.frame img.contain,
 	.frame canvas.contain {
 		object-fit: contain;
+	}
+
+	/* Blurred bg-fill behind a letterboxed frame. Inherits the absolute/inset/cover box from
+	   `.frame img` above; adds the scale (hide the blur's soft edges) + heavy blur + a slight
+	   dim so the real contained image stays the focus. z-index:0 keeps it UNDER the real <img>
+	   (auto) and the frozen-GIF canvas (z-index:1). Device-tunable (blur radius / dim). */
+	.frame .bg-fill {
+		z-index: 0;
+		transform: scale(1.15);
+		filter: blur(28px) brightness(0.6);
+		pointer-events: none;
 	}
 
 	.frame canvas {
