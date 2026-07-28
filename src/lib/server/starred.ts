@@ -88,6 +88,11 @@ async function loadSet(dataDir: string): Promise<Set<string>> {
 	} catch {
 		set = new Set(); // missing/unreadable → empty (not an error)
 	}
+	// Compare-and-set (concurrency, adversarial #4 — mirrors hidden.ts): a concurrent
+	// setStarred may have populated a FRESHER cache while we awaited the disk read. Never
+	// overwrite it with our stale snapshot — that would durably drop the just-marked name (the
+	// next write reads the clobbered cache and persists the gap). Adopt the fresher cache.
+	if (cache && cache.dir === dataDir) return cache.set;
 	cache = { dir: dataDir, set };
 	return set;
 }

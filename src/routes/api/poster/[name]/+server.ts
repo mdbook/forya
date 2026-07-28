@@ -59,6 +59,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 		headers: {
 			'content-type': 'image/jpeg',
 			'content-length': String(poster.length),
+			'x-content-type-options': 'nosniff', // no MIME-sniff off the served bytes (S1)
 			'cache-control': 'private, max-age=3600'
 		}
 	});

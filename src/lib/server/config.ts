@@ -19,6 +19,13 @@ function parseInt10(value: string | undefined, fallback: number): number {
 	return Number.isFinite(n) ? n : fallback;
 }
 
+/** Float sibling of parseInt10, for fractional knobs. `Number.parseFloat('')` is NaN, so a
+ *  blank/unset/garbage value falls back rather than poisoning arithmetic downstream. */
+function parseFloat10(value: string | undefined, fallback: number): number {
+	const n = Number.parseFloat(value ?? '');
+	return Number.isFinite(n) ? n : fallback;
+}
+
 // DATA_DIR is the writable-volume signal — the PREREQUISITE for any persisted
 // feature (posters, meta, starred), but on its own it implies NONE of them. We
 // derive it once here so the feature gates below can key off it. (0.8.0 decoupled
@@ -45,6 +52,15 @@ export const config = {
 	/** Initial value for the client's autoplay-next preference (advance to the
 	 *  next card when a video ends, instead of looping). Client can toggle. */
 	autoAdvance: parseBool(env.AUTO_ADVANCE, false),
+	/** Max fraction of a clip/photo that `cover` may crop before it letterboxes with a
+	 *  blurred bg-fill. Runtime-tunable so the operator can move between the two coherent
+	 *  products WITHOUT a rebuild: ~0.10 = "never crop more than a tenth" (a standard 9:16
+	 *  clip letterboxes on a modern phone — it needs ~18-24% depending on the device's own
+	 *  aspect), vs ~0.24 = "normal vertical clips stay full-bleed on every common phone
+	 *  through 9:21". Photos/squares letterbox either way (3:4 needs ~38%, 1:1 ~54%).
+	 *  Clamped to [0, 0.9]: at 1.0 the derived ratio is infinite (nothing ever letterboxes,
+	 *  defeating the cap), and a negative would invert the comparison. */
+	maxCoverCrop: Math.min(0.9, Math.max(0, parseFloat10(env.MAX_COVER_CROP, 0.1))),
 	/** Optional writable dir forya OWNS for its generated poster/metadata cache
 	 *  (0.5). Empty/unset = the feature is OFF: no ffmpeg/ffprobe ever spawns and
 	 *  nothing is written anywhere, so the response surface is byte-identical to a

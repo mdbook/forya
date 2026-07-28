@@ -32,6 +32,7 @@
 	import Copy from '@lucide/svelte/icons/copy';
 	import Heart from '@lucide/svelte/icons/heart';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
+	import { hasGifFrame } from '$lib/gallery';
 	import type { FeedItem, FeedSettings } from '$lib/types';
 	import {
 		saveMute,
@@ -41,7 +42,7 @@
 		saveAutoAdvance
 	} from '$lib/stores/prefs';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
-	import { pickFit } from '$lib/fit';
+	import { pickFit, ratioForCropCap } from '$lib/fit';
 	import { isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
 	import { nearestVideos, reassignPool } from '$lib/pool';
 
@@ -215,6 +216,12 @@
 	// M6-reconcile: the flip simply never happens on a double. Per-card: it persists across carousel
 	// FRAME-swipes (Feed-level state; ImageCarousel's in-gallery swipe never touches it) and resets
 	// only on a genuine card-change (the IO active-flip). Reactive → the ♪ chip dims when paused.
+	// The crop cap is an operator dial (MAX_COVER_CROP → settings), so the ratio threshold is
+	// derived HERE once and handed to every fit decision — the pooled <video> below plus
+	// VideoCard's poster and ImageCarousel's frames — rather than each site importing the
+	// build-time default. `$derived` so a settings change would flow without a reload.
+	const maxCoverRatio = $derived(ratioForCropCap(settings.maxCoverCrop));
+
 	let galleryPaused = $state(false);
 	let galleryPauseTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -222,6 +229,14 @@
 	// shared by the channel's assert + the in-gesture bless hooks.
 	function activeGalleryHasAudio(): boolean {
 		return !!(activeItem?.media && activeItem.audio);
+	}
+
+	// True iff the active card is a gallery containing a GIF frame — the OTHER thing a tap can
+	// pause. Separate from the audio predicate because a GIF post is usually AUDIOLESS: gating
+	// the pause toggle on a soundtrack alone leaves the tap dead on exactly the content
+	// "GIFs pause on tap" was asked for (review #2199).
+	function activeGalleryHasGif(): boolean {
+		return hasGifFrame(activeItem?.media);
 	}
 
 	function slotForName(name: string): number {
@@ -259,7 +274,7 @@
 	function applyFit(v: HTMLVideoElement, item: FeedItem, useElementDims = true) {
 		const ew = useElementDims ? v.videoWidth : 0;
 		const eh = useElementDims ? v.videoHeight : 0;
-		const f = pickFit(ew || item.width || 0, eh || item.height || 0, viewportAR);
+		const f = pickFit(ew || item.width || 0, eh || item.height || 0, viewportAR, maxCoverRatio);
 		v.classList.toggle('contain', f === 'contain');
 	}
 
@@ -1073,12 +1088,18 @@
 			blessPool();
 			return;
 		}
-		// Already blessed, active is a GALLERY (no pooled <video>): tap = PAUSE/RESUME its soundtrack
-		// (round-3 fast-follow), mirroring the video "tap = play/pause". Deferred past the double-tap
-		// window so a double-tap-to-LIKE cancels it (no audio blip on likes). Only a gallery WITH a
-		// soundtrack has anything to toggle. onTapGesture cancels the pending toggle on a double.
+		// Already blessed, active is a GALLERY (no pooled <video>): tap = PAUSE/RESUME THE POST,
+		// mirroring the video "tap = play/pause". Deferred past the double-tap window so a
+		// double-tap-to-LIKE cancels it (no blip on likes); onTapGesture cancels the pending toggle.
+		//
+		// The trigger is AUDIO **or** GIF, and deliberately not "every gallery" (review #2199):
+		//  • audio gallery → pauses the soundtrack (and now holds the cycle); the ♪ chip shows it.
+		//  • GIF gallery → freezes the GIF, and the freeze IS the feedback — no chip needed.
+		//  • plain photo gallery → unchanged NO-OP. Widening to all galleries would let a stray tap
+		//    pause INVISIBLY (the ♪ chip only renders `{#if hasAudio}`) and, since `paused` also
+		//    gates the auto-cycle, silently halt autoscroll with nothing on screen explaining why.
 		if (!v) {
-			if (activeGalleryHasAudio()) scheduleGalleryPauseToggle();
+			if (activeGalleryHasAudio() || activeGalleryHasGif()) scheduleGalleryPauseToggle();
 			return;
 		}
 		if (v.paused) {
@@ -1570,6 +1591,7 @@
 							{item}
 							active={i === activeIndex}
 							{viewportAR}
+							{maxCoverRatio}
 							{autoAdvance}
 							{muted}
 							paused={i === activeIndex && galleryPaused}
@@ -1581,6 +1603,7 @@
 							{item}
 							active={i === activeIndex}
 							{viewportAR}
+							{maxCoverRatio}
 							posters={settings.posters}
 							revealed={revealedByName[item.name] ?? false}
 							buffering={i === activeIndex && activeBuffering}

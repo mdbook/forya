@@ -4,6 +4,38 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.15.0 — GIF pause, gallery autoscroll, crop cap + operator dial
+
+Photo posts and GIFs stop being passive: a gallery now **cycles its own frames** on a timer,
+feed-autoscroll can no longer skip past a gallery it has only shown the cover of, a **tap pauses
+the whole post** (soundtrack, GIF animation and the cycle together), and how much of a clip may
+be **cropped** is now a single operator dial instead of two hand-tuned constants.
+
+- **Gallery auto-cycle**: the idle dwell steps through a gallery's frames and reaches the FEED
+  only from the last one, so _"don't advance until the gallery has shown every image"_ holds **by
+  construction** — no counter, no has-cycled flag. Frames cycle in manual mode too but stop on the
+  last frame rather than looping. Single-image posts behave exactly as before.
+- **GIF pause**: browsers expose no pause API for an animated GIF in `<img>`, so pausing overlays
+  a canvas holding the on-screen frame, geometry-identical to the image it covers (same box, same
+  fit class, natural-size draw). Freeze is exact; **resume jumps to the live position** — the only
+  alternative is owning a GIF decoder. Letterboxed GIFs freeze their blurred surround too.
+- **Pause trigger** widened to _has-audio OR has-gif_ — deliberately not every gallery, since a
+  plain photo post has no on-screen affordance and would pause invisibly while silently halting
+  autoscroll.
+- **Crop cap**: the video/gallery split (`1.8` ≈ 44% crop / `1.4` ≈ 28%) collapses into ONE cap,
+  `MAX_COVER_CROP`, default **0.10** — cover is chosen only while it crops ≤ the cap, and anything
+  beyond letterboxes with a blurred bg-fill. Now **runtime-configurable** (`MAX_COVER_CROP` env,
+  clamped `[0, 0.9]`): the ≤10%-crop vs full-bleed-9:16 tradeoff is a compose change plus a
+  container cycle, **no rebuild**. A standard 9:16 clip needs ~0.18–0.24 to stay full-bleed
+  depending on the device's own aspect; photos and squares letterbox either way.
+- **Hardening**: `starred.ts` `loadSet` gets the compare-and-set guard `hidden.ts`/`share.ts`
+  already carried (closes a cold-start race that could durably drop a just-marked favorite), and
+  `X-Content-Type-Options: nosniff` is emitted on served media/poster bytes — including the
+  **unauthenticated** `/share/<token>/*` surface.
+
+HTTP Range, the directory scan and the `<video>` pool are untouched; the server surface is purely
+additive (29 insertions, zero deletions).
+
 ## 0.14.0 — library layout: layout-agnostic reader
 
 forya's directory scanner + media serving are now **layout-agnostic**: a feed can keep the flat

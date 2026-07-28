@@ -11,7 +11,8 @@
 	// (feed scroll) — there's no horizontal-scroll ancestor so our JS finger-drag owns horizontal —
 	// AND double-tap-to-zoom is disabled (the pan-y version let iOS's zoom recognizer break
 	// double-tap-spam + cancel mid-swipe, #1442). No feed-scroll hijack.
-	import { pickFit, GALLERY_MAX_COVER_RATIO } from '$lib/fit';
+	import { pickFit } from '$lib/fit';
+	import { GIF_MIME, nextGalleryStep } from '$lib/gallery';
 	import type { FeedItem } from '$lib/types';
 	import Music from '@lucide/svelte/icons/music';
 
@@ -19,6 +20,7 @@
 		item,
 		active,
 		viewportAR,
+		maxCoverRatio,
 		autoAdvance = false,
 		muted = true,
 		paused = false,
@@ -30,6 +32,9 @@
 		active: boolean;
 		/** Viewport aspect ratio (w/h), reactive — drives per-frame object-fit on rotate/resize. */
 		viewportAR: number;
+		/** Cover/contain ratio threshold, derived by Feed from the operator's MAX_COVER_CROP dial.
+		 *  Passed in rather than imported so every fit decision in the app uses ONE value. */
+		maxCoverRatio: number;
 		/** Feed's auto-advance mode — when on, an idle gallery advances the FEED after a dwell. */
 		autoAdvance?: boolean;
 		/** Feed mute pref (round-3). Only drives the soundtrack CHIP's audible/emphasis state — the
@@ -55,16 +60,31 @@
 	const hasAudio = $derived(!!item.audio);
 	let index = $state(0);
 
-	// Auto-advance (opt-in): a gallery has no <video> 'ended' to drive the feed, so without this
-	// the feed DEAD-ENDS on the first photo post when AUTO_ADVANCE is on. An idle dwell advances
-	// the feed; it RESTARTS on every frame change (`index`), so an actively-swiping user is never
-	// yanked away — the feed only moves on after DWELL of no interaction. Active-only; cleared on
-	// deactivate by the effect's own teardown. (Dwell is generous + device-tunable.)
-	const AUTO_ADVANCE_DWELL_MS = 8000;
+	// Auto-cycle: the idle dwell steps through the gallery's own FRAMES and advances the FEED only
+	// off the LAST frame — so feed-autoscroll can no longer leave a photo post having shown just
+	// its cover (a gallery has no <video> 'ended' to drive the feed, so this dwell is the whole
+	// mechanism). The policy lives in `nextGalleryStep` (pure, truth-tabled in tests/gallery.test.ts);
+	// this effect is only the wiring. Reading `index` here makes the effect RESTART on every frame
+	// change — manual swipe or auto-step alike — so an actively-swiping user is never yanked away
+	// and each auto-step naturally re-arms the next. Active-only; the teardown clears any in-flight
+	// timer on deactivate or on any input change.
 	$effect(() => {
-		if (!active || !autoAdvance || frames.length === 0) return;
-		void index; // restart the dwell whenever the frame changes (manual swipe or reset)
-		const t = setTimeout(() => onadvance?.(), AUTO_ADVANCE_DWELL_MS);
+		const step = nextGalleryStep({
+			active,
+			autoAdvance,
+			// ONE PAUSED CONCEPT PER POST: a paused post holds its images too, so tap = pause stops
+			// the soundtrack, the GIF and this cycle together (mirrors the video tap = play/pause).
+			// This is a real semantic change from round-3, where `paused` only muted audio and the
+			// feed still advanced after the dwell.
+			held: paused,
+			index,
+			frameCount: frames.length
+		});
+		if (step.kind === 'none') return;
+		const t = setTimeout(
+			() => (step.kind === 'feed' ? onadvance?.() : go(index + 1)),
+			step.delayMs
+		);
 		return () => clearTimeout(t);
 	});
 
@@ -102,6 +122,59 @@
 		};
 	});
 
+	// GIF FREEZE. Browsers expose NO pause API for an animated GIF in an <img> — no .pause(), no
+	// animation-play-state — so "pause the GIF" has to be a picture of the GIF. We overlay a canvas
+	// holding the frame that was on screen at the moment of pause.
+	//
+	// ponytail: the <img> keeps animating underneath the canvas, so FREEZE is exact but RESUME
+	// jumps to the live position instead of continuing from the frozen frame. Invisible for the
+	// actual use case (stop a loop so you can look at it); the only way to fix it is to own a GIF
+	// decoder (gifuct + manual frame stepping), which is a dependency and a decoder to maintain in
+	// exchange for a pause button. Upgrade path if it ever matters, not before.
+	//
+	// GEOMETRY (review #2199): the canvas carries the SAME CSS box and the SAME fit class as the
+	// <img> and is sized to the image's NATURAL dimensions, so the browser applies an identical
+	// object-fit to both and the freeze is geometrically a no-op. Drawing at ELEMENT size instead
+	// would visibly jump/rescale at the moment of pause on exactly the crop-heavy posts that
+	// motivated GALLERY_MAX_COVER_RATIO.
+	const frozen = $derived(active && paused && frames[index]?.type === GIF_MIME);
+	let frozenCanvas = $state<HTMLCanvasElement>();
+	// Second snapshot for the LETTERBOXED case. The blurred bg-fill is a copy of the SAME live
+	// frame, and the main frozen canvas is `contain`-boxed, so it covers only the letterboxed
+	// middle — without this the surrounding blur KEEPS ANIMATING while the post is "paused"
+	// (review #2262). Not an edge case: any frame whose cover-crop exceeds the cap letterboxes,
+	// so at a tight cap this is the COMMON path for a GIF. Mounted only when contained.
+	let frozenBgCanvas = $state<HTMLCanvasElement>();
+
+	$effect(() => {
+		if (!frozen) return;
+		const c = frozenCanvas;
+		// The <img> is this canvas's sibling inside `.frame` — read it off the DOM rather than
+		// threading per-index element bindings through the {#each} for one transient snapshot.
+		// `:not(.bg-fill)` selects the REAL frame: since da40225 the bg-fill copy is the FIRST
+		// <img> in `.frame`, and a bare `querySelector('img')` would take it. That happens to be
+		// harmless today (same src ⇒ same natural dims ⇒ same pixels) but only by luck — pin the
+		// real one so a future change to the bg source can't silently corrupt the snapshot.
+		// Explicit generic: TS infers HTMLImageElement from a bare tag selector, but the `:not()`
+		// degrades it to Element, so the element type has to be stated.
+		const img = c?.parentElement?.querySelector<HTMLImageElement>('img:not(.bg-fill)');
+		// naturalWidth is 0 until decode. If we're early the canvas stays TRANSPARENT — the GIF
+		// keeps animating underneath and the pause silently appears not to take. It does NOT
+		// self-heal: the effect only re-runs when `index`/`paused` change, i.e. the user must
+		// re-tap. Benign (an undrawn canvas is transparent, not a black box, and you have to be
+		// looking at the GIF to tap it) so it stays unguarded rather than growing a decode-wait.
+		// Same-origin (/api/media), so the canvas is never tainted.
+		if (!c || !img || !img.naturalWidth) return;
+		// Both snapshots come from the SAME <img> in the same run, so the frozen middle and the
+		// frozen blur can never show different moments of the GIF.
+		for (const target of [c, frozenBgCanvas]) {
+			if (!target) continue;
+			target.width = img.naturalWidth;
+			target.height = img.naturalHeight;
+			target.getContext('2d')?.drawImage(img, 0, 0);
+		}
+	});
+
 	function go(next: number) {
 		const n = frames.length;
 		if (n === 0) return;
@@ -126,11 +199,10 @@
 	}
 	function fitClass(i: number): '' | 'contain' {
 		const nd = natural[i];
-		// Round-3 crop fix (#1526): photos use the tighter GALLERY threshold so wide/square frames
-		// letterbox (show whole) instead of cover-cropping ~40% off. Videos keep the 1.8 default.
-		return nd && pickFit(nd.w, nd.h, viewportAR, GALLERY_MAX_COVER_RATIO) === 'contain'
-			? 'contain'
-			: '';
+		// Crop cap (2026-07-28): one MAX_COVER_CROP (~10%) for photos AND video — a frame whose
+		// cover-crop would exceed the cap letterboxes (whole frame shown) with a blurred bg-fill
+		// behind it instead of losing a chunk. Supersedes the round-3 #1526 gallery-only 1.4 split.
+		return nd && pickFit(nd.w, nd.h, viewportAR, maxCoverRatio) === 'contain' ? 'contain' : '';
 	}
 
 	// Interactive finger-follow drag (TikTok-style): the track tracks the finger in REAL TIME the
@@ -331,6 +403,22 @@
 			{#each frames as frame, i (frame.name)}
 				<div class="frame">
 					{#if shouldLoad(i)}
+						{#if fitClass(i) === 'contain'}
+							<!-- Blurred background-fill behind a LETTERBOXED frame (TikTok/IG-reels look):
+							     a scaled, heavily-blurred copy of the SAME image — served from cache (same
+							     src as the real <img>), no extra network, no second decoder. Only mounted
+							     for a contained frame (under cover it'd be fully occluded), so a filling
+							     frame pays nothing. Decorative; the real <img> below carries the alt text. -->
+							<img class="bg-fill" src={frame.url} alt="" aria-hidden="true" draggable="false" />
+							{#if frozen && i === index}
+								<!-- Frozen copy of the bg-fill. The one above is the LIVE frame, so on a paused
+								     GIF it would keep animating around the frozen middle. Same `.bg-fill` class
+								     (so it inherits the scale/blur/dim and z-index:0 — `.frame .bg-fill` outranks
+								     `.frame canvas`) and placed immediately AFTER it, so DOM order paints it over
+								     the live copy while both stay under the real <img>. -->
+								<canvas class="bg-fill" bind:this={frozenBgCanvas} aria-hidden="true"></canvas>
+							{/if}
+						{/if}
 						<img
 							class={fitClass(i)}
 							src={frame.url}
@@ -338,6 +426,12 @@
 							draggable="false"
 							onload={(e) => onImgLoad(i, e)}
 						/>
+						{#if frozen && i === index}
+							<!-- Frozen GIF frame. Same fit class + same absolute box as the <img> above, sized
+							     to natural dims in the effect, so the swap is geometrically invisible.
+							     Decorative: the <img> underneath still carries the alt text. -->
+							<canvas class={fitClass(i)} bind:this={frozenCanvas} aria-hidden="true"></canvas>
+						{/if}
 					{/if}
 				</div>
 			{/each}
@@ -431,7 +525,12 @@
 		height: 100%;
 	}
 
-	.frame img {
+	/* The frozen-GIF canvas is styled IDENTICALLY to the <img> it covers (same box, same fit) —
+	   that identity is what makes the freeze geometrically a no-op, so these selectors must stay
+	   paired. `canvas` is a replaced element, so object-fit applies to it exactly as it does to
+	   an image. z-index keeps it above the still-animating <img> underneath. */
+	.frame img,
+	.frame canvas {
 		position: absolute;
 		inset: 0;
 		width: 100%;
@@ -442,8 +541,24 @@
 		user-select: none;
 	}
 
-	.frame img.contain {
+	.frame img.contain,
+	.frame canvas.contain {
 		object-fit: contain;
+	}
+
+	/* Blurred bg-fill behind a letterboxed frame. Inherits the absolute/inset/cover box from
+	   `.frame img` above; adds the scale (hide the blur's soft edges) + heavy blur + a slight
+	   dim so the real contained image stays the focus. z-index:0 keeps it UNDER the real <img>
+	   (auto) and the frozen-GIF canvas (z-index:1). Device-tunable (blur radius / dim). */
+	.frame .bg-fill {
+		z-index: 0;
+		transform: scale(1.15);
+		filter: blur(28px) brightness(0.6);
+		pointer-events: none;
+	}
+
+	.frame canvas {
+		z-index: 1;
 	}
 
 	/* Discrete prev/next controls (accessible click + keyboard). Vertically centered edge chips,

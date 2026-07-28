@@ -127,6 +127,49 @@ describe('starred — enabled round-trip (explicit dataDir)', () => {
 		expect(await readStarredOrdered(dir)).toEqual(['second.mp4', 'first.mp4']);
 	});
 
+	it('a read racing a write is NOT clobbered (adversarial #4 — no durable loss)', async () => {
+		// Pre-existing on disk; cold cache (fresh process). starred has no boot-warm lane, so the
+		// UNSERIALIZED reader here is readStarred (the SSR/GET seed) racing a setStarred write —
+		// both enter loadSet with a null cache and read disk. We GATE the reader's disk read so it
+		// captures the stale {keep} bytes but RESOLVES last, after the write has already persisted
+		// {keep,raced} and populated the cache. Pre-fix, loadSet's unconditional `cache = {...}`
+		// then overwrites the fresher cache with the stale snapshot, and the NEXT write persists
+		// the gap (durable loss of 'raced'). Post-fix, the compare-and-set adopts the fresher cache.
+		await setStarred('keep.mp4', true, dir); // disk = {keep}
+		clearStarredCache();
+
+		const realReadFile = fsp.readFile.bind(fsp) as (...a: unknown[]) => Promise<unknown>;
+		let releaseReader!: () => void;
+		const readerGate = new Promise<void>((r) => (releaseReader = r));
+		let call = 0;
+		const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (...args: unknown[]) => {
+			call++;
+			if (call === 1) {
+				const stale = await realReadFile(...args); // read the current (stale {keep}) bytes NOW
+				await readerGate; // ...but hold RESOLUTION until the write has landed
+				return stale;
+			}
+			return realReadFile(...args);
+		}) as typeof fsp.readFile);
+
+		try {
+			const read = readStarred(dir); // call 1 → reads stale {keep}, gated open
+			const write = setStarred('raced.mp4', true, dir); // call 2 → {keep}+raced, persists, cache={keep,raced}
+			await write; // writer fully done first (cache + disk hold raced)
+			releaseReader(); // now let the stale reader resolve + do its `cache =` assignment
+			await read;
+		} finally {
+			spy.mockRestore();
+		}
+
+		// In-mem cache must still hold BOTH (the reader must not have clobbered raced away).
+		expect(await readStarred(dir)).toEqual(['keep.mp4', 'raced.mp4']);
+		// Durable: a subsequent write must not have dropped the raced name from disk.
+		await setStarred('after.mp4', true, dir);
+		clearStarredCache();
+		expect(await readStarred(dir)).toEqual(['after.mp4', 'keep.mp4', 'raced.mp4']);
+	});
+
 	it('a missing or corrupt starred.json reads back as [] (never throws)', async () => {
 		expect(await readStarred(dir)).toEqual([]); // missing file
 		clearStarredCache();

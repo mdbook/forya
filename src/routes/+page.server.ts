@@ -52,6 +52,7 @@ export const load: PageServerLoad = async () => {
 			preloadAhead: config.preloadAhead,
 			preloadBehind: config.preloadBehind,
 			autoAdvance: config.autoAdvance,
+			maxCoverCrop: config.maxCoverCrop,
 			posters: config.posters,
 			starred: config.starred,
 			hidden: config.hidden,

@@ -22,6 +22,45 @@ async function loadConfig(dataDir: string, posters: string) {
 	return (await import('../src/lib/server/config')).config;
 }
 
+// MAX_COVER_CROP is an OPERATOR DIAL, so the parse has to survive whatever lands in the env.
+// The clamp is the load-bearing part: cap ≥ 1 makes the derived ratio infinite (nothing ever
+// letterboxes — the cap silently stops existing), and a negative inverts the comparison.
+async function loadCropCap(value: string | undefined) {
+	vi.resetModules();
+	if (value === undefined) vi.stubEnv('MAX_COVER_CROP', '');
+	else vi.stubEnv('MAX_COVER_CROP', value);
+	return (await import('../src/lib/server/config')).config.maxCoverCrop;
+}
+
+describe('config MAX_COVER_CROP — the operator crop dial', () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+		vi.resetModules();
+	});
+
+	it('defaults to 0.10 when unset (the shipped default — 9:16 letterboxes)', async () => {
+		expect(await loadCropCap(undefined)).toBeCloseTo(0.1);
+	});
+
+	it('accepts the full-bleed-9:16 value the operator may dial in', async () => {
+		expect(await loadCropCap('0.24')).toBeCloseTo(0.24);
+	});
+
+	it('falls back to the default on garbage rather than producing NaN', async () => {
+		// A NaN cap would poison ratioForCropCap and make EVERY fit decision undefined.
+		expect(await loadCropCap('wat')).toBeCloseTo(0.1);
+	});
+
+	it('CLAMPS >0.9 — at cap 1 the derived ratio is infinite and nothing would ever letterbox', async () => {
+		expect(await loadCropCap('1')).toBeCloseTo(0.9);
+		expect(await loadCropCap('99')).toBeCloseTo(0.9);
+	});
+
+	it('CLAMPS negatives to 0 — a negative cap would invert the cover/contain test', async () => {
+		expect(await loadCropCap('-0.5')).toBe(0);
+	});
+});
+
 describe('config gate derivation — DATA_DIR is the volume, POSTERS is the opt-in', () => {
 	afterEach(() => {
 		vi.unstubAllEnvs();
