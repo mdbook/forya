@@ -55,7 +55,15 @@ function extsFromRegex(constName: string): string[] {
  *  left the suite green, and deleting one from the list below silently dropped its coverage. The
  *  vacuous-green guard cannot catch either — it checks that each LISTED source yielded
  *  extensions, and has no way to see a source that was never listed. So: discover, then assert
- *  the discovered set EQUALS the enumerated one. A new acceptance regex now fails loudly, by name. */
+ *  the discovered set EQUALS the enumerated one. A new acceptance regex now fails loudly, by name.
+ *
+ *  KNOWN LIMIT, named deliberately rather than closed (review #2290): discovery finds
+ *  REGEX-shaped sources. The one ARRAY-shaped source, `VIDEO_EXTENSIONS`, is wired in by hand
+ *  below — so a SECOND array-shaped source (e.g. `SUBTITLE_EXTENSIONS`) would be invisible here.
+ *  Left open on purpose: this repo has produced exactly one array-shaped ext source in its whole
+ *  history while adding a regex is the common move, and every level of this regress is cheaper to
+ *  state than to close. If you add an array-shaped source, add it to SCANNER_EXT_SOURCES yourself
+ *  — nothing will remind you. */
 function discoverExtRegexNames(): string[] {
 	return SRC.split('\n')
 		.map((l) => /^const ([A-Za-z0-9_]+)\s*=\s*\/(?=.*\\\.\([a-z0-9|]+\))/i.exec(l.trim())?.[1])
