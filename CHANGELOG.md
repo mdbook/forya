@@ -4,6 +4,19 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.15.1 — MIME closure test (test-only)
+
+No runtime change. Adds `tests/mime-closure.test.ts`, pinning an invariant that 0.15.0's
+`nosniff` header made load-bearing: every extension the scanner accepts must have a
+`MIME_BY_EXT` entry. Without it, adding a container or frame format to the scanner and
+forgetting the MIME table serves that media as `application/octet-stream` with sniffing
+forbidden — it silently stops rendering, with no error and no failing test.
+
+The test discovers the scanner's acceptance regexes from the source rather than restating
+them, so it cannot drift from what it pins, and it is mutation-proven in both directions (a
+new unmapped extension fails; a source dropped from its own list fails). Version bumped
+because `version_guard` correctly refuses to republish an existing release tag.
+
 ## 0.15.0 — GIF pause, gallery autoscroll, crop cap + operator dial
 
 Photo posts and GIFs stop being passive: a gallery now **cycles its own frames** on a timer,
