@@ -43,7 +43,7 @@
 	} from '$lib/stores/prefs';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
 	import { pickFit, ratioForCropCap } from '$lib/fit';
-	import { isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
+	import { HOLD_SPEED, isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
 	import { nearestVideos, reassignPool } from '$lib/pool';
 
 	let {
@@ -1074,6 +1074,23 @@
 		lastTapName = name;
 	}
 
+	// Hold-to-speed (0.16): VideoCard reports a left-third press-and-hold; we set the rate on
+	// the pooled element. Remember WHICH element we sped up rather than re-resolving the
+	// active one on release — an auto-advance mid-hold would otherwise reset the new card and
+	// strand the old element at HOLD_SPEED for whatever clip it gets recycled onto.
+	// ponytail: one remembered element is enough because a pointer can only hold one card;
+	// if a second pointer ever needs its own rate, key this by pointerId.
+	let heldVideo: HTMLVideoElement | null = null;
+	function setHoldSpeed(fast: boolean) {
+		if (fast) {
+			heldVideo = activeVideo();
+			if (heldVideo) heldVideo.playbackRate = HOLD_SPEED;
+			return;
+		}
+		if (heldVideo) heldVideo.playbackRate = 1;
+		heldVideo = null;
+	}
+
 	function tapActive() {
 		const v = activeVideo();
 		if (!blessed) {
@@ -1615,6 +1632,7 @@
 							onseek={seekActiveFrac}
 							onseekby={seekActiveBy}
 							ontap={onTapGesture}
+							onhold={setHoldSpeed}
 						/>
 					{/if}
 				{:else}

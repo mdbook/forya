@@ -40,6 +40,39 @@ export function shouldRetryOnPlayable(s: PlaybackState): boolean {
 /** `HTMLMediaElement.readyState` value: at least the current frame is decoded. */
 export const HAVE_CURRENT_DATA = 2;
 
+// ── Hold-to-speed (0.16) ──────────────────────────────────────────────────────
+// Press-and-hold the LEFT THIRD of a card → the video plays fast; release → normal.
+// The zone test is pure so the "which third" boundary is pinned by a test rather than
+// living only in a component; VideoCard owns the timers and Feed owns the element.
+
+/** Playback rate while held. 2× is the TikTok/YouTube hold-to-speed standard; the
+ *  operator's ticket didn't name a number, so this ONE constant is the dial. */
+export const HOLD_SPEED = 2;
+
+/** How long a press must last before it counts as a hold rather than a tap. Long
+ *  enough that a normal play/pause tap never blips the speed. */
+export const HOLD_MS = 200;
+
+/** Movement (px) that reclassifies a press as a scroll and cancels the pending hold.
+ *  Touch scrolling usually fires `pointercancel` too, but not before this timer on a
+ *  slow drag — so the slop is the one that actually holds on iOS. */
+export const HOLD_SLOP = 10;
+
+/** Fraction of the card's width that is the speed zone. */
+export const SPEED_ZONE = 1 / 3;
+
+/** Is this press inside the left-third speed zone? `clientX` and the card's own
+ *  bounding rect, so it follows the card on any viewport (no hardcoded px). */
+export function inSpeedZone(clientX: number, rectLeft: number, rectWidth: number): boolean {
+	if (!(rectWidth > 0)) return false;
+	return clientX - rectLeft < rectWidth * SPEED_ZONE;
+}
+
+/** Has the finger moved far enough from the press origin to be a scroll, not a hold? */
+export function movedTooFar(dx: number, dy: number): boolean {
+	return Math.hypot(dx, dy) > HOLD_SLOP;
+}
+
 /**
  * Is the media already playable (has current data) at the moment a `play()`
  * attempt rejected? If so the rejection was a transient decoder-handover race,

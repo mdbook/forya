@@ -8,8 +8,10 @@
 	// play/buffering affordances. Playback STATE is owned by Feed and passed in;
 	// gestures (tap, seek) are reported back out. The single IntersectionObserver still
 	// lives in Feed and drives `active`.
+	import { onDestroy } from 'svelte';
 	import Play from '@lucide/svelte/icons/play';
 	import { pickFit } from '$lib/fit';
+	import { HOLD_MS, inSpeedZone, movedTooFar } from '$lib/playback';
 	import type { FeedItem } from '$lib/types';
 
 	let {
@@ -27,7 +29,8 @@
 		onslot,
 		onseek,
 		onseekby,
-		ontap
+		ontap,
+		onhold
 	}: {
 		item: FeedItem;
 		active: boolean;
@@ -59,7 +62,73 @@
 		/** Tap the full-bleed target → Feed toggles play/pause on the active element. The
 		 *  MouseEvent is forwarded so Feed can place the double-tap heart at the tap point. */
 		ontap: (e?: MouseEvent) => void;
+		/** Press-and-hold on the LEFT THIRD of this card → play the active element fast
+		 *  (`true`); release/cancel → back to normal (`false`). Feed owns the element and
+		 *  applies the rate. */
+		onhold: (fast: boolean) => void;
 	} = $props();
+
+	// ── Hold-to-speed (0.16) ─────────────────────────────────────────────────────
+	// Rides the SAME full-bleed .tap target as play/pause — a press in the left third that
+	// outlives HOLD_MS becomes a hold, and its release is swallowed so it doesn't also
+	// toggle play/pause. Everything here is local shell state; the policy constants and the
+	// zone test live in $lib/playback (pure, tested). Works for mouse press-hold too — one
+	// pointer path, no touch/mouse fork.
+	let holdTimer: ReturnType<typeof setTimeout> | undefined;
+	let holding = false;
+	let suppressClick = false;
+	let downX = 0;
+	let downY = 0;
+
+	function clearHoldTimer() {
+		clearTimeout(holdTimer);
+		holdTimer = undefined;
+	}
+
+	function onTapPointerDown(e: PointerEvent) {
+		// Reset here (not on release) so a cancelled hold can never leave a stale suppression
+		// that eats the NEXT genuine tap.
+		suppressClick = false;
+		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		if (!inSpeedZone(e.clientX, r.left, r.width)) return;
+		downX = e.clientX;
+		downY = e.clientY;
+		clearHoldTimer();
+		holdTimer = setTimeout(() => {
+			holdTimer = undefined;
+			holding = true;
+			onhold(true);
+		}, HOLD_MS);
+	}
+
+	function onTapPointerMove(e: PointerEvent) {
+		if (holding || holdTimer === undefined) return;
+		// A drag from the left third is the user scrolling the feed, not asking for speed.
+		if (movedTooFar(e.clientX - downX, e.clientY - downY)) clearHoldTimer();
+	}
+
+	/** Release / cancel / mouse-leaves-the-card — always restores normal speed, so a video
+	 *  is never stranded fast. `pointercancel` covers the scroll-takeover and the
+	 *  interrupted-touch cases; no click follows those, so suppression is harmless. */
+	function onTapPointerUp() {
+		clearHoldTimer();
+		if (!holding) return;
+		holding = false;
+		suppressClick = true;
+		onhold(false);
+	}
+
+	// A card can unmount mid-hold (auto-advance scrolls it past MOUNT_RADIUS) — no pointerup
+	// ever reaches the destroyed button, so restore normal speed here or the element stays fast.
+	onDestroy(onTapPointerUp);
+
+	function onTapClick(e: MouseEvent) {
+		if (suppressClick) {
+			suppressClick = false;
+			return;
+		}
+		ontap(e);
+	}
 
 	// The manual play affordance shows for a blocked (autoplay-rejected) OR user-paused
 	// ACTIVE card — and only then, so a normally-autoplaying card never flashes a play
@@ -194,8 +263,18 @@
 	{/if}
 
 	<!-- Full-bleed tap target: tap = play/pause (a real <button> for a11y + keyboard).
-	     The action rail sits above this via z-index. -->
-	<button class="tap" aria-label="Play or pause" onclick={ontap}></button>
+	     Press-and-hold in the LEFT THIRD = fast playback (0.16); that release is swallowed
+	     so a hold never also toggles play/pause. The action rail sits above this via z-index. -->
+	<button
+		class="tap"
+		aria-label="Play or pause"
+		onclick={onTapClick}
+		onpointerdown={onTapPointerDown}
+		onpointermove={onTapPointerMove}
+		onpointerup={onTapPointerUp}
+		onpointercancel={onTapPointerUp}
+		onpointerleave={onTapPointerUp}
+	></button>
 
 	{#if showPlay}
 		<div class="tap-hint" aria-hidden="true">
@@ -338,6 +417,12 @@
 		   the tap handler, the gesture, or playback. (Capture-confirmed: the dim is uniform
 		   across the whole video, not a scrim behind the ▶ affordance.) */
 		-webkit-tap-highlight-color: transparent;
+		/* Hold-to-speed (0.16) makes a LONG press a first-class gesture on this target, and iOS
+		   answers a long press with the callout/selection UI — which would steal the press and
+		   cancel the pointer mid-hold. Both off; neither has any other effect on a bare button. */
+		-webkit-touch-callout: none;
+		user-select: none;
+		-webkit-user-select: none;
 	}
 
 	/* The .tap fills the cell, so the global :focus-visible ring (outward offset) would clip
