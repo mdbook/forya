@@ -43,7 +43,7 @@
 	} from '$lib/stores/prefs';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
 	import { pickFit, ratioForCropCap } from '$lib/fit';
-	import { isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
+	import { HOLD_SPEED, isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
 	import { nearestVideos, reassignPool } from '$lib/pool';
 
 	let {
@@ -588,6 +588,14 @@
 				// unmutes it once playing. Either way the per-element blessing survives the swap
 				// (harness A).
 				v.muted = true;
+				// Same idea for the hold-to-speed rate (0.16, review): a recycled element must not
+				// carry the OUTGOING clip's playbackRate onto the incoming one. The gesture's own
+				// restore paths cover every single-pointer case, but `heldVideo` is one slot — a
+				// multitouch hold spanning an active-card change (finger1 holds A, feed advances,
+				// finger2 holds B) overwrites it and leaves A's element fast FOREVER, since nothing
+				// else ever resets a rate. This makes the recycle path self-healing regardless of
+				// gesture, so no reachable sequence can strand a pooled element at HOLD_SPEED.
+				v.playbackRate = 1;
 				// Warm this clip's first bytes into the HTTP cache as it enters the coverage
 				// window (active±1), so its load()/play() is ready within the first tap (M2.4).
 				prewarm(item.url);
@@ -1072,6 +1080,23 @@
 		}
 		lastTapAt = now;
 		lastTapName = name;
+	}
+
+	// Hold-to-speed (0.16): VideoCard reports a left-third press-and-hold; we set the rate on
+	// the pooled element. Remember WHICH element we sped up rather than re-resolving the
+	// active one on release — an auto-advance mid-hold would otherwise reset the new card and
+	// strand the old element at HOLD_SPEED for whatever clip it gets recycled onto.
+	// ponytail: one remembered element is enough because a pointer can only hold one card;
+	// if a second pointer ever needs its own rate, key this by pointerId.
+	let heldVideo: HTMLVideoElement | null = null;
+	function setHoldSpeed(fast: boolean) {
+		if (fast) {
+			heldVideo = activeVideo();
+			if (heldVideo) heldVideo.playbackRate = HOLD_SPEED;
+			return;
+		}
+		if (heldVideo) heldVideo.playbackRate = 1;
+		heldVideo = null;
 	}
 
 	function tapActive() {
@@ -1615,6 +1640,7 @@
 							onseek={seekActiveFrac}
 							onseekby={seekActiveBy}
 							ontap={onTapGesture}
+							onhold={setHoldSpeed}
 						/>
 					{/if}
 				{:else}
