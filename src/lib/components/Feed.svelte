@@ -588,6 +588,14 @@
 				// unmutes it once playing. Either way the per-element blessing survives the swap
 				// (harness A).
 				v.muted = true;
+				// Same idea for the hold-to-speed rate (0.16, review): a recycled element must not
+				// carry the OUTGOING clip's playbackRate onto the incoming one. The gesture's own
+				// restore paths cover every single-pointer case, but `heldVideo` is one slot — a
+				// multitouch hold spanning an active-card change (finger1 holds A, feed advances,
+				// finger2 holds B) overwrites it and leaves A's element fast FOREVER, since nothing
+				// else ever resets a rate. This makes the recycle path self-healing regardless of
+				// gesture, so no reachable sequence can strand a pooled element at HOLD_SPEED.
+				v.playbackRate = 1;
 				// Warm this clip's first bytes into the HTTP cache as it enters the coverage
 				// window (active±1), so its load()/play() is ready within the first tap (M2.4).
 				prewarm(item.url);

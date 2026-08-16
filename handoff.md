@@ -274,7 +274,14 @@ with the tap/double-tap gesture stack instead of layering another hit target ove
   the card's `onDestroy` (auto-advance can unmount the card mid-hold, and no pointerup then reaches
   the dead button). Feed restores the **remembered** element, not the currently-active one — an
   auto-advance mid-hold would otherwise reset the wrong card and leave the old pooled element at
-  2× for whatever clip it gets recycled onto.
+  2× for whatever clip it gets recycled onto. **And the guarantee does not rest on the gesture at
+  all**: the pool's src-recycle path resets `playbackRate = 1` next to its `muted = true`
+  re-assert, so a recycled element self-heals whatever the pointers did. That backstop is
+  load-bearing, not belt-and-braces — `heldVideo` is a single slot, so a MULTITOUCH hold spanning
+  an active-card change (finger1 holds A, the feed advances, finger2 holds B) overwrites it and
+  nothing else would ever restore A's element. Nothing else in the app writes a playback rate, so
+  the recycle reset is the only floor there is. Don't drop it while "the gesture already
+  restores" — that reasoning is exactly what the multitouch case breaks (review, 0.16.0).
 - **A drag from the left third is a scroll, not a hold** (`movedTooFar`, 10px slop). `pointercancel`
   covers the scroll takeover on iOS but not always before the 200ms timer, so the slop is the guard
   that actually holds.
