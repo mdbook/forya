@@ -89,6 +89,9 @@
 		// Reset here (not on release) so a cancelled hold can never leave a stale suppression
 		// that eats the NEXT genuine tap.
 		suppressClick = false;
+		// Only the playing active card can be sped up. Arming on a paused/blocked one would
+		// change nothing visible AND swallow the release — the tap that was meant to resume it.
+		if (!active || paused || blocked) return;
 		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
 		if (!inSpeedZone(e.clientX, r.left, r.width)) return;
 		downX = e.clientX;
