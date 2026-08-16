@@ -4,6 +4,25 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.16.0 — hold-to-speed (press the left third)
+
+Press-and-hold the **left third** of a video and it plays fast; let go and it snaps back to
+normal speed. The familiar TikTok/YouTube gesture, scoped to the left third so the centre and
+right of the card stay free for other gestures.
+
+- **2× is a default, not a decision.** The originating ticket asked for faster playback without
+  naming a multiplier, so this ships the universal 2× and puts it behind a single exported
+  constant (`HOLD_SPEED` in `src/lib/playback.ts`) — changing it is a two-line diff.
+- Rides the card's existing full-bleed tap target rather than a new overlay, so it composes with
+  tap-to-play/pause and double-tap-to-like. The release that ends a hold is swallowed, so holding
+  never also pauses the video.
+- Normal speed is restored on release, on touch-cancel, when the pointer leaves the card, and when
+  the card unmounts mid-hold — and it restores the element that was actually sped up, so an
+  auto-advance during a hold can't strand a pooled `<video>` at 2×.
+- A drag that starts in the left third is treated as a feed scroll, not a hold (10px slop), and a
+  press must outlive 200ms to count — so ordinary taps and scrolls are unaffected.
+- Works with a mouse press-hold on desktop through the same pointer path.
+
 ## 0.15.1 — MIME closure test (test-only)
 
 No runtime change. Adds `tests/mime-closure.test.ts`, pinning an invariant that 0.15.0's

@@ -255,6 +255,32 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.16.0 — hold-to-speed (press the left third)
+
+Press-and-hold the **left third** of a video card → it plays at `HOLD_SPEED`; release → normal,
+immediately. Rides the existing full-bleed `.tap` button rather than a new overlay, so it composes
+with the tap/double-tap gesture stack instead of layering another hit target over it.
+
+- **`HOLD_SPEED = 2` is an ASSUMPTION, not a spec.** The originating ticket asked for "_x speed_"
+  and never named the number; 2× is the TikTok/YouTube hold-to-speed standard. It is one exported
+  constant in `src/lib/playback.ts` and one test line — changing it is a two-line diff.
+- **The zone is rect-relative** (`inSpeedZone`, pure + tested): a third of the _card's own_ width,
+  so it survives rotate/desktop with no hardcoded px. Centre and right thirds stay free for future
+  gestures — that split is the ticket's, don't quietly widen it to the whole card.
+- **A hold must not also toggle play/pause.** `click` fires on release, so the release that ends a
+  hold is swallowed (`suppressClick`, cleared on the next `pointerdown` so a cancelled hold can
+  never eat a later genuine tap).
+- **Never strand a clip fast.** Restore runs on `pointerup`/`pointercancel`/`pointerleave` AND on
+  the card's `onDestroy` (auto-advance can unmount the card mid-hold, and no pointerup then reaches
+  the dead button). Feed restores the **remembered** element, not the currently-active one — an
+  auto-advance mid-hold would otherwise reset the wrong card and leave the old pooled element at
+  2× for whatever clip it gets recycled onto.
+- **A drag from the left third is a scroll, not a hold** (`movedTooFar`, 10px slop). `pointercancel`
+  covers the scroll takeover on iOS but not always before the 200ms timer, so the slop is the guard
+  that actually holds.
+- Same pointer path serves mouse press-hold on desktop — no touch/mouse fork.
+- Verify on-device with `DEBUG_PLAYBACK=1` (the on-screen playback overlay).
+
 ## 0.13.0 — reddit galleries (base36 ids + single-image posts + gif)
 
 reddit-sync (a sibling ingester) writes reddit photo saves under the same on-disk shape as
