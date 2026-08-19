@@ -4,6 +4,27 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.17.0 — volume slider (hover-reveal off the mute button)
+
+A **volume slider** for playback level, revealed by hovering the mute button in the action
+rail. Click still toggles mute exactly as before; the slider only scales the level, so the
+iOS audio-bless path is untouched.
+
+- **Hover-reveal, not a persistent control.** The slider sits flush above the mute button and
+  fades in when the cursor is over either of them — no extra chrome on the feed at rest, and
+  no reflow when it appears. It also reveals on keyboard focus, so it is not mouse-only.
+- **It is hidden where it could not work.** iOS/iPadOS Safari makes `HTMLMediaElement.volume`
+  read-only — assignments are silently ignored, because volume there belongs to the hardware
+  buttons. Rather than show a control that does nothing, the app **probes** whether volume is
+  settable (no UA sniffing, so it self-corrects if Safari ever changes) and omits the slider
+  when it isn't. Touch devices without hover omit it too, since a hover-revealed control can't
+  be opened by tapping.
+- **The level persists** per feed in localStorage, alongside the existing info/autoplay
+  preferences, and is applied to the whole video pool and the gallery soundtrack channel — so
+  it survives scrolling, card recycling and reloads.
+- Volume is deliberately independent of mute: dragging to zero silences without touching the
+  mute state, and unmuting returns to the level you set.
+
 ## 0.16.0 — hold-to-speed (press the left third)
 
 Press-and-hold the **left third** of a video and it plays fast; let go and it snaps back to
