@@ -39,11 +39,15 @@
 		loadInfo,
 		saveInfo,
 		loadAutoAdvance,
-		saveAutoAdvance
+		saveAutoAdvance,
+		loadVolume,
+		saveVolume,
+		clampVolume
 	} from '$lib/stores/prefs';
 	import { loadHidden, saveHidden, applyHidden } from '$lib/stores/hidden';
 	import { pickFit, ratioForCropCap } from '$lib/fit';
 	import { HOLD_SPEED, isMediaReady, shouldRetryOnPlayable } from '$lib/playback';
+	import { volumeIsSettable } from '$lib/volume';
 	import { nearestVideos, reassignPool } from '$lib/pool';
 
 	let {
@@ -101,6 +105,14 @@
 
 	let activeIndex = $state(0);
 	let muted = $state(true);
+	// Volume (0.17): a level multiplier, deliberately ORTHOGONAL to `muted`. `muted` is the
+	// iOS bless/audibility gate and is load-bearing — the slider never writes it, so the
+	// cure's tap-to-unmute path is byte-identical whatever the level is. Loaded from prefs at
+	// mount, applied to every element that can carry audio (the pool + the gallery channel).
+	// `volumeSettable` is false on iOS, where the platform ignores the assignment; the rail
+	// hides the control there rather than showing one that does nothing (see $lib/volume).
+	let volume = $state(1);
+	let volumeSettable = $state(false);
 	let feedEl = $state<HTMLElement>();
 	let cardEls = $state<HTMLElement[]>([]);
 	let io: IntersectionObserver | undefined;
@@ -1175,6 +1187,22 @@
 		assertGalleryAudio();
 	}
 
+	// Push the current level onto every element that can carry audio: the pool (each element
+	// keeps its own volume across `src`-swaps, so newly created ones are seeded at creation and
+	// only LIVE ones need this) and the gallery soundtrack channel. Volume is independent of
+	// `muted`, so this is safe to call at any time — it can neither unmute a silent feed nor
+	// silence an audible one, and it never touches the bless.
+	function applyVolume() {
+		for (const v of pool) v.volume = volume;
+		if (galleryAudio) galleryAudio.volume = volume;
+	}
+
+	function setVolume(next: number) {
+		volume = clampVolume(next, volume);
+		applyVolume();
+		saveVolume(feedName, volume);
+	}
+
 	function toggleMute() {
 		if (!blessed) {
 			// First interaction via the rail (the muted-icon "tap to unmute" affordance): flip
@@ -1308,6 +1336,10 @@
 		muted = true;
 		infoOpen = loadInfo(feedName);
 		autoAdvance = loadAutoAdvance(feedName, settings.autoAdvance);
+		// Volume is loaded (and probed) BEFORE the pool/gallery elements are created below, so
+		// they are born at the right level — no audible jump from a default-1 first frame.
+		volume = loadVolume(feedName);
+		volumeSettable = volumeIsSettable();
 		for (const n of loadHidden(feedName)) hidden.add(n);
 
 		// (starredSet is SSR-seeded from the `starred` prop at component INIT — see its
@@ -1371,6 +1403,7 @@
 		for (let s = 0; s < POOL_SIZE; s++) {
 			const v = document.createElement('video');
 			v.muted = true;
+			v.volume = volume; // seed at birth; volume survives later src-swaps (unlike muted)
 			v.playsInline = true;
 			v.setAttribute('playsinline', '');
 			v.loop = !autoAdvance;
@@ -1431,6 +1464,7 @@
 		// (onGalleryAudioPlaying) — the D-safe, confirmed-playing unmute (code audit S1).
 		const ga = document.createElement('audio');
 		ga.muted = true;
+		ga.volume = volume;
 		ga.loop = true;
 		ga.preload = 'auto';
 		ga.setAttribute('playsinline', '');
@@ -1653,12 +1687,15 @@
 	</div>
 	<ActionRail
 		{muted}
+		{volume}
+		showVolume={volumeSettable}
 		{autoAdvance}
 		allowHide={settings.allowHide}
 		{infoOpen}
 		showStarred={settings.starred}
 		starred={activeItem ? starredSet.has(activeItem.name) : false}
 		onmute={toggleMute}
+		onvolume={setVolume}
 		onautoadvance={toggleAutoAdvance}
 		onstar={onRailStar}
 		onopenliked={likedView ? undefined : () => goto(resolve('/liked'))}

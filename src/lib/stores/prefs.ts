@@ -56,3 +56,42 @@ export function saveAutoAdvance(feedName: string, on: boolean): void {
 		/* localStorage unavailable — non-fatal */
 	}
 }
+
+// ── Volume (0.17) ─────────────────────────────────────────────────────────────
+// Per-feed like every other pref above. NOTE: on iOS/iPadOS Safari
+// `HTMLMediaElement.volume` is READ-ONLY (assignments are silently ignored), so the
+// stored value is inert there and the UI hides the control — see `volumeIsSettable`
+// in $lib/volume. Persisting it anyway costs nothing and means a user who moves
+// between a phone and a desktop keeps their level.
+const volumeKey = (feedName: string) => `forya:${feedName}:volume`;
+
+/** Load the volume preference (0..1), defaulting to full. Clamps and rejects junk, so a
+ *  hand-edited or corrupted localStorage entry can't strand a feed silent or NaN. */
+export function loadVolume(feedName: string): number {
+	if (!browser) return 1;
+	const raw = localStorage.getItem(volumeKey(feedName));
+	// A MISSING key must fall back to full, not to zero — `Number(null)` and `Number('')`
+	// are both 0, so reading straight into Number() would start every fresh browser silent
+	// and look exactly like broken audio. Guard the empty cases before coercing.
+	if (raw === null || raw === '') return 1;
+	return clampVolume(Number(raw), 1);
+}
+
+/** Persist the volume preference. */
+export function saveVolume(feedName: string, volume: number): void {
+	if (!browser) return;
+	try {
+		localStorage.setItem(volumeKey(feedName), String(clampVolume(volume, 1)));
+	} catch {
+		/* localStorage unavailable — non-fatal */
+	}
+}
+
+/** Clamp to the range `HTMLMediaElement.volume` accepts. Anything non-finite (a missing
+ *  key reads as NaN, a junk value as NaN) falls back rather than throwing an
+ *  IndexSizeError at the assignment or wedging the element at a NaN level. Exported for
+ *  the round-trip test. */
+export function clampVolume(v: number, fallback: number): number {
+	if (!Number.isFinite(v)) return fallback;
+	return Math.min(1, Math.max(0, v));
+}

@@ -255,6 +255,52 @@ src` should return exactly one hit.
   `FEED_NAME` belongs. A rename is a find/replace; don't hardcode `forya` into
   serving/feed logic.
 
+## 0.17.0 — volume slider (hover-reveal off the mute button)
+
+A native `<input type="range">` for playback level, revealed by hovering the rail's mute
+button. Deliberately a thin layer ON TOP of the audio machine, not a change to it.
+
+- **`volume` is orthogonal to `muted`, and that separation is the whole safety argument.**
+  `muted` is the iOS bless / audibility gate (`assertActiveAudio`, `blessPool`) and is
+  load-bearing; the slider never writes it. So the cure's in-gesture tap-to-unmute path is
+  byte-identical at any level, and no volume change can mint, spend or lose a bless. Keep it
+  that way — routing audio through anything stateful (a Web Audio gain node, say) to make
+  volume work on iOS would put a graph in front of every pooled `<video>` and break the
+  per-element grant model the whole play machine rests on. That trade is not worth it.
+- **iOS/iPadOS Safari makes `HTMLMediaElement.volume` READ-ONLY** — the assignment is silently
+  ignored and it reads back 1, by WebKit policy (volume belongs to the hardware buttons). A
+  volume slider is therefore inert on forya's primary platform. `volumeIsSettable()`
+  (`src/lib/volume.ts`) **probes** for this — sets `.volume = 0.5` on a detached `<audio>` and
+  reads it back — rather than sniffing the UA, so it cannot go stale if WebKit changes its
+  mind, and it isn't fooled by desktop browsers spoofing iOS strings. False → the rail omits
+  the control entirely.
+- **Two gates, two distinct cases — both are needed.** The JS probe covers _volume isn't
+  settable_ (iOS). The `@media (hover: none)` rule covers _volume IS settable but there's no
+  hover_ (touch Android), where a hover-revealed control would otherwise be visible-space-but-
+  unopenable. Removing either one reintroduces a dead control on one platform.
+- Revealed on `:hover` **or** `:focus-within` of the group wrapping button+slider — the group,
+  not the button, because the slider sits directly above it and a button-only hover target
+  would flicker shut as the cursor moved onto the slider. Hidden state is `opacity: 0` +
+  `pointer-events: none` rather than `display: none`, so it keeps its place in the tab order
+  and can be focused into view; the touch case uses `display: none` precisely because there a
+  control nothing can open should not be tabbable either.
+- **Volume survives `src`-swaps on an element** (unlike `muted`, which iOS resets on swap and
+  the recycle path re-asserts). So elements are seeded at creation and `applyVolume()` only
+  has to touch the LIVE pool + gallery channel when the slider moves — there is no need for a
+  third re-assert on the recycle path, and adding one would be cargo-culted from the `muted`
+  line above it.
+- **The slider stops ArrowUp/ArrowDown from reaching the window handler.** `onKeydown` in
+  `Feed.svelte` claims both arrows to scroll the feed, `preventDefault()` included, and its
+  `focusIsInteractive()` guard covers **only Space** — so a focused vertical range would
+  otherwise be keyboard-dead, scrolling the feed instead of moving the thumb. The fix is local
+  to the input (mirroring the seek slider's ArrowLeft/Right `stopPropagation`) rather than
+  widening the guard to the arrows: rail BUTTONS do nothing with arrows natively, so guarding
+  globally would only take away the feed-scroll that keyboard users have today.
+- Persistence is per-`FEED_NAME` in localStorage, matching every other pref. `loadVolume`
+  guards the missing key explicitly: `Number(null)` and `Number('')` are both **0**, so
+  coercing straight from `getItem` would start every fresh browser silent and read as broken
+  audio.
+
 ## 0.16.0 — hold-to-speed (press the left third)
 
 Press-and-hold the **left third** of a video card → it plays at `HOLD_SPEED`; release → normal,

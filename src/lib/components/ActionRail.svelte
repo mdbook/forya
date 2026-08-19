@@ -30,12 +30,15 @@
 
 	let {
 		muted,
+		volume,
+		showVolume,
 		autoAdvance,
 		allowHide,
 		infoOpen,
 		showStarred,
 		starred,
 		onmute,
+		onvolume,
 		onautoadvance,
 		onstar,
 		onopenliked,
@@ -44,6 +47,13 @@
 		onhide
 	}: {
 		muted: boolean;
+		/** Playback level, 0..1. Independent of `muted` — this scales the audio, the mute
+		 *  button gates it (and is the iOS bless entry point). */
+		volume: number;
+		/** Render the volume slider at all. False where the platform ignores
+		 *  `HTMLMediaElement.volume` (iOS/iPadOS), because a control that cannot move the
+		 *  audio is worse than no control — Feed probes for this, see $lib/volume. */
+		showVolume: boolean;
 		/** Advance-to-next ("Next") vs loop-this-clip ("Loop"). */
 		autoAdvance: boolean;
 		allowHide: boolean;
@@ -54,6 +64,8 @@
 		starred: boolean;
 		/** First tap also unlocks audio — Feed does the unlock inside the gesture. */
 		onmute: () => void;
+		/** New volume level, 0..1. Feed clamps, applies and persists it. */
+		onvolume: (v: number) => void;
 		onautoadvance: () => void;
 		/** Toggle the active card's favorite mark (the a11y / instant path; double-tap is the
 		 *  gesture equivalent). */
@@ -85,6 +97,17 @@
 	function heartCancel() {
 		clearTimeout(lpTimer);
 	}
+	// A VERTICAL range is driven by ArrowUp/ArrowDown — and Feed's window-level keydown handler
+	// claims exactly those two keys to scroll the feed, `preventDefault()` included, with no
+	// focused-control guard (that guard exists only for Space). Left alone, the slider would be
+	// keyboard-DEAD: arrows would scroll the feed past the card whose volume you were setting.
+	// Stop those two from reaching the window, mirroring what the seek slider already does for
+	// its own ArrowLeft/Right. Deliberately narrow — j/k/m still fall through, so the app's other
+	// shortcuts keep working while the slider holds focus, and no other control's behaviour moves.
+	function volumeKey(e: KeyboardEvent) {
+		if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.stopPropagation();
+	}
+
 	function heartClick() {
 		if (suppressNextHeartTap) {
 			suppressNextHeartTap = false; // the long-press already opened the view — swallow this tap
@@ -95,18 +118,43 @@
 </script>
 
 <div class="rail">
-	<button
-		class="rail-btn"
-		onclick={onmute}
-		aria-label={muted ? 'Unmute' : 'Mute'}
-		aria-pressed={!muted}
-	>
-		{#if muted}
-			<VolumeX size={24} aria-hidden="true" />
-		{:else}
-			<Volume2 size={24} aria-hidden="true" />
+	<!-- Mute button + its HOVER-REVEAL volume slider (0.17). The group is the hover target, not
+	     the button alone: the slider sits directly above the button, so hovering only the button
+	     would hide the slider the instant the cursor moved onto it. Click behaviour is unchanged
+	     — mute still toggles (and still mints the iOS bless); the slider only scales the level. -->
+	<div class="volume-group">
+		{#if showVolume}
+			<!-- The NATIVE range input, so keyboard (arrows/home/end) and screen-reader semantics
+			     come free — nothing here re-implements a slider. Revealed on hover OR focus-within,
+			     so it is reachable by keyboard and not only by mouse; `pointer-events` follow the
+			     reveal so the hidden slider can never swallow a click meant for the button. -->
+			<input
+				class="volume"
+				type="range"
+				min="0"
+				max="1"
+				step="0.01"
+				value={volume}
+				oninput={(e) => onvolume(e.currentTarget.valueAsNumber)}
+				onkeydown={volumeKey}
+				aria-label="Volume"
+				aria-valuetext={`${Math.round(volume * 100)}%`}
+			/>
 		{/if}
-	</button>
+
+		<button
+			class="rail-btn"
+			onclick={onmute}
+			aria-label={muted ? 'Unmute' : 'Mute'}
+			aria-pressed={!muted}
+		>
+			{#if muted}
+				<VolumeX size={24} aria-hidden="true" />
+			{:else}
+				<Volume2 size={24} aria-hidden="true" />
+			{/if}
+		</button>
+	</div>
 
 	{#if showStarred}
 		<!-- Favorite (heart): filled red when starred. The double-tap gesture is the primary
@@ -185,6 +233,78 @@
 		border-radius: 50%;
 		cursor: pointer;
 		backdrop-filter: blur(8px);
+	}
+
+	/* The mute button's hover group. `position: relative` anchors the revealed slider directly
+	   above the button; the slider is absolutely positioned so revealing it never reflows the
+	   rail (a reserved gap would be a persistent control by another name). */
+	.volume-group {
+		position: relative;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	/* Vertical native range. `writing-mode: vertical-lr` + `direction: rtl` is the standard way
+	   to stand a range input up (it replaced the non-standard `-webkit-appearance:
+	   slider-vertical`); rtl puts LOUD at the top, the direction every volume control moves.
+	   `bottom: 100%` sits it flush against the button so the cursor never crosses a dead gap on
+	   its way to the slider — a gap there would make the reveal flicker shut mid-approach. */
+	.volume {
+		position: absolute;
+		bottom: 100%;
+		left: 50%;
+		transform: translateX(-50%);
+		writing-mode: vertical-lr;
+		direction: rtl;
+		width: 2.75rem;
+		height: 5.5rem;
+		margin: 0 0 0.5rem;
+		padding: 0.5rem 0;
+		background: rgba(0, 0, 0, 0.55);
+		border: 1px solid rgba(255, 255, 255, 0.15);
+		border-radius: 999px;
+		accent-color: #fff;
+		cursor: pointer;
+		backdrop-filter: blur(8px);
+		/* Hidden at rest. `pointer-events: none` matters as much as the opacity: an invisible
+		   but still hit-testable slider overlaps nothing today, but it would silently eat a
+		   click the moment the rail's spacing changed. */
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 0.15s ease;
+	}
+
+	/* HOVER-DEVICE ONLY. A hover-revealed control is unreachable by touch, and `volume` is
+	   settable on Android (unlike iOS) — so without this gate a touch Android user would get a
+	   slider they can see the space for but can never open. `hover: hover` is the honest test
+	   for "this input can reveal on hover"; everywhere else the control simply does not exist,
+	   same as on iOS. */
+	@media (hover: hover) {
+		/* Revealed by hovering the GROUP (button or slider), or by focus — so the slider is
+		   reachable with the keyboard, not mouse-only. It stays opacity-0 rather than
+		   display:none at rest specifically so it keeps its place in the tab order and CAN be
+		   focused into view. */
+		.volume-group:hover .volume,
+		.volume-group:focus-within .volume {
+			opacity: 1;
+			pointer-events: auto;
+		}
+	}
+
+	/* No hover (touch): never render it at all, rather than leave it permanently invisible but
+	   focusable — a control nothing can open should not be in the tab order either. */
+	@media (hover: none) {
+		.volume {
+			display: none;
+		}
+	}
+
+	.volume:focus-visible {
+		outline: none;
+		box-shadow:
+			0 0 0 2px #000,
+			0 0 0 4px #fff;
 	}
 
 	.rail-btn.on {
