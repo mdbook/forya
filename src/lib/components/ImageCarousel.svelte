@@ -25,7 +25,8 @@
 		muted = true,
 		paused = false,
 		ontap,
-		onadvance
+		onadvance,
+		onframe
 	}: {
 		item: FeedItem;
 		/** This card is the active (in-viewport) one — gates ±1 adjacent preload + auto-advance. */
@@ -50,6 +51,10 @@
 		ontap?: (e?: MouseEvent) => void;
 		/** Advance the FEED to the next item (auto-advance dwell fired) — Feed scrolls on. */
 		onadvance?: () => void;
+		/** Report the currently-visible frame index up to Feed (save-to-photos, #122): the Save
+		 *  action saves the frame the user is looking at, not always the cover. Only the ACTIVE
+		 *  gallery reports. */
+		onframe?: (index: number) => void;
 	} = $props();
 
 	const frames = $derived(item.media ?? []);
@@ -59,6 +64,13 @@
 	// only — the audio itself is Feed's blessed <audio> channel; this component never plays anything.
 	const hasAudio = $derived(!!item.audio);
 	let index = $state(0);
+
+	// Report the visible frame up to Feed so the Save action saves the frame in view (#122).
+	// ACTIVE-ONLY: an off-active card resets `index` to 0 (below) — reporting that would clobber
+	// the active gallery's tracked frame. Reads `index`+`active` → re-runs on every swipe/step.
+	$effect(() => {
+		if (active) onframe?.(index);
+	});
 
 	// Auto-cycle: the idle dwell steps through the gallery's own FRAMES and advances the FEED only
 	// off the LAST frame — so feed-autoscroll can no longer leave a photo post having shown just

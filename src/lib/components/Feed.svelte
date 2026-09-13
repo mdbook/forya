@@ -34,6 +34,7 @@
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import { hasGifFrame } from '$lib/gallery';
 	import type { FeedItem, FeedSettings } from '$lib/types';
+	import { pickSaveTarget } from '$lib/save';
 	import {
 		saveMute,
 		loadInfo,
@@ -138,6 +139,9 @@
 	}
 	let copyToast = $state(false);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
+	// The active gallery's currently-visible frame (save-to-photos, #122): ImageCarousel reports
+	// its index up (active-only) so Save persists the frame in view. 0 for videos / cover-frame.
+	let activeGalleryFrame = $state(0);
 	let infoOpen = $state(false);
 	let autoAdvance = $state(false);
 	const visible = $derived(applyHidden(allItems, hidden));
@@ -749,6 +753,49 @@
 		a.href = url;
 		a.download = shareName;
 		a.click();
+	}
+
+	/** Save the active item's media to the device (save-to-photos, #122). iOS surfaces its native
+	 *  "Save Image" / "Save Video" (Save-to-Photos) option only when we hand navigator.share a
+	 *  FILE rather than a link — so we fetch the already-served media bytes as a Blob and share the
+	 *  File. Where FILE-share isn't supported (desktop, Firefox, insecure context) we degrade to a
+	 *  direct download of the same bytes; and if the fetch itself fails, a plain link to the media
+	 *  URL (Safari can still long-press-save from it). Distinct from share() (0.8.4), which
+	 *  deliberately shares a LINK for the rich OG preview — this is the explicit "save the media
+	 *  itself" action the operator confirmed (#122). Cure-irrelevant: touches no pool/play state.
+	 *  Gallery → the CURRENTLY-VISIBLE frame; video → the item itself (pickSaveTarget, tested). */
+	async function save(item: FeedItem | undefined) {
+		if (!item) return;
+		const target = pickSaveTarget(item, activeGalleryFrame);
+		try {
+			const res = await fetch(target.url);
+			if (!res.ok) throw new Error(`media ${res.status}`);
+			const blob = await res.blob();
+			const file = new File([blob], target.name, { type: target.type || blob.type });
+			// Feature-detect FILE share specifically: navigator.share exists on desktop but can't
+			// take files, so gate on canShare({ files }) — the exact iOS Save-to-Photos capability.
+			if (navigator.canShare?.({ files: [file] })) {
+				await navigator.share({ files: [file] });
+				return; // iOS renders "Save Image"/"Save Video" in the sheet from here
+			}
+			// Fallback: download the fetched bytes via a blob: URL (desktop + gives Safari a real
+			// file to long-press-save when the share sheet isn't available).
+			const href = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = href;
+			a.download = target.name;
+			a.click();
+			setTimeout(() => URL.revokeObjectURL(href), 1000); // revoke after the download starts
+			showModeToast('Saving…');
+		} catch (e) {
+			// AbortError = the user dismissed the share sheet → nothing to do.
+			if ((e as Error)?.name === 'AbortError') return;
+			// Last resort (e.g. fetch blocked): a plain link to the media URL.
+			const a = document.createElement('a');
+			a.href = target.url;
+			a.download = target.name;
+			a.click();
+		}
 	}
 
 	function toggleInfo() {
@@ -1656,6 +1703,7 @@
 							paused={i === activeIndex && galleryPaused}
 							ontap={onTapGesture}
 							onadvance={() => scrollTo(activeIndex + 1)}
+							onframe={(f) => (activeGalleryFrame = f)}
 						/>
 					{:else}
 						<VideoCard
@@ -1700,6 +1748,7 @@
 		onstar={onRailStar}
 		onopenliked={likedView ? undefined : () => goto(resolve('/liked'))}
 		onshare={() => share(activeItem)}
+		onsave={() => save(activeItem)}
 		oninfo={toggleInfo}
 		onhide={() => hide(activeItem?.name)}
 	/>

@@ -4,6 +4,25 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.18.0 — Save to device (save-to-photos)
+
+Adds a dedicated **Save** control to the action rail (#122) that saves the current media to the
+viewer's own device — the standard TikTok "save" gesture. On iOS it shares the media as a **File**
+(`navigator.share({ files })`), which surfaces the native **Save Image / Save Video** (Save-to-Photos)
+option in the share sheet; the existing Share button is untouched and still shares a **link** for the
+rich Open Graph preview (0.8.4). Both are now distinct controls, per the operator's confirmed intent.
+
+Works for videos and image galleries: a gallery saves the **currently-visible frame** (ImageCarousel
+now reports its active frame index up to the feed); "save every frame" is a deliberate later follow-up.
+
+Feature-detects file-share via `navigator.canShare({ files })` and degrades gracefully where it is
+unavailable (desktop, Firefox, insecure context) to a direct download of the fetched bytes, then to a
+plain media link as a last resort. No backend/route changes and no new dependencies — it reuses the
+existing `/api/media` byte-serving path.
+
+The pure target-selection logic (video vs. gallery current frame, with an out-of-range fallback) lives
+in `src/lib/save.ts` and is truth-tabled in `tests/save.test.ts`.
+
 ## 0.17.0 — volume slider (hover-reveal off the mute button)
 
 A **volume slider** for playback level, revealed by hovering the mute button in the action

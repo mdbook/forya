@@ -25,6 +25,7 @@
 	import Heart from '@lucide/svelte/icons/heart';
 	import SkipForward from '@lucide/svelte/icons/skip-forward';
 	import Share from '@lucide/svelte/icons/share';
+	import Download from '@lucide/svelte/icons/download';
 	import Info from '@lucide/svelte/icons/info';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
@@ -43,6 +44,7 @@
 		onstar,
 		onopenliked,
 		onshare,
+		onsave,
 		oninfo,
 		onhide
 	}: {
@@ -74,6 +76,10 @@
 		 *  favorites view itself (no self-entry there). A plain tap stays onstar. 0.9.0. */
 		onopenliked?: () => void;
 		onshare: () => void;
+		/** Save the active media to the device — iOS native Save-to-Photos via a File share, with a
+		 *  direct-download fallback where file-share isn't supported (save-to-photos, #122). Distinct
+		 *  from onshare, which shares a LINK. */
+		onsave: () => void;
 		oninfo: () => void;
 		onhide: () => void;
 	} = $props();
@@ -189,6 +195,13 @@
 
 	<button class="rail-btn" onclick={onshare} aria-label="Share or save this video">
 		<Share size={24} aria-hidden="true" />
+	</button>
+
+	<!-- Save the active media to the device: on iOS a File share surfaces the native "Save
+	     Image"/"Save Video" (Save-to-Photos) option; elsewhere it downloads the file directly
+	     (#122). Separate from Share (link) per the operator's confirmed intent. -->
+	<button class="rail-btn" onclick={onsave} aria-label="Save to your device">
+		<Download size={24} aria-hidden="true" />
 	</button>
 
 	<button
