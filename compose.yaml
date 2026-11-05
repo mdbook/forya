@@ -1,0 +1,24 @@
+services:
+  forya:
+    build: .
+    image: forya:local
+    pull_policy: build
+    restart: unless-stopped
+    ports:
+      - '${BIND_ADDRESS:-127.0.0.1}:3000:3000'
+    environment:
+      VIDEO_DIR: /srv/videos
+      DATA_DIR: /data
+      FEED_NAME: ${FEED_NAME:-feed}
+      POSTERS: ${POSTERS:-false}
+    volumes:
+      - type: bind
+        source: ${VIDEOS_PATH:?Set VIDEOS_PATH in .env to an existing video folder}
+        target: /srv/videos
+        read_only: true
+        bind:
+          create_host_path: false
+      - forya-data:/data
+
+volumes:
+  forya-data:
