@@ -2,163 +2,87 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-An **iOS-first vertical video feed** (TikTok-style) that serves both the UI and
-the video bytes — with correct HTTP Range support — from one self-contained
-Docker image. Point it at a directory of videos and it just works:
+A phone-friendly, vertical feed for your own videos and photo galleries.
+Point it at a folder, then watch in your browser. Your source files stay read-only.
 
-```bash
-docker run -p 3000:3000 -v /path/to/videos:/srv/videos registry.mdbook.me/mikayla/forya
+## Run with Docker Compose
+
+You need **Docker with Compose v2**, an internet connection for the first build,
+and a folder containing `.mp4`, `.mov`, `.webm`, or `.m4v` files. Playback depends
+on your browser's codec support; forya does not convert videos.
+
+**Image availability:** there is not yet a verified public image to recommend.
+Compose builds the included Dockerfile locally, with no registry login or local
+Node installation. The first build can take several minutes.
+
+1. [Download the source ZIP](https://github.com/mdbook/forya/archive/refs/heads/main.zip)
+   and extract it, or clone [the repository](https://github.com/mdbook/forya).
+   Open a terminal in the extracted repository folder.
+2. Create a file named `.env` in that folder with your editor. Add these settings,
+   replacing the video path with your **existing** folder's absolute path:
+
+```dotenv
+VIDEOS_PATH="/path/to/your/videos"
+FEED_NAME="My feed"
 ```
 
-Then open <http://localhost:3000>. On an iPhone, use **Share → Add to Home
-Screen** to launch it full-screen like a native app.
+Keep quotes around paths containing spaces. On Docker Desktop, allow Docker
+access to that folder if prompted.
 
-> _No public demo — forya serves private video files. See [Configuration](#configuration) to run your own._
+3. Start it:
 
-Built with SvelteKit (adapter-node) + Svelte 5 + TypeScript. No database, no
-build step at runtime, no ffmpeg — one Node process scans the directory and
-streams the files.
+```bash
+docker compose up -d --build
+```
 
-## Why
+Open <http://localhost:3000>. You should see your clips after the initial scan.
+Compose keeps favorites in a named volume, without changing your video folder.
+The default only accepts connections from this computer, since forya has no login.
+For phone access or hosting, see [access and authentication](docs/guide.md#access-and-authentication).
 
-It's a focused rewrite of a Caddy-file-server + React feed that was buggy on iOS
-Safari: autoplay rejected, `100vh` layout breaking under the dynamic toolbar,
-many videos decoding at once, and broken seek/scrub from mishandled HTTP Range.
-forya fixes those at the root — an iOS-tuned feed UI over a thin, **Range-correct**
-serving backend. See [`handoff.md`](./handoff.md) for the full story.
+**Empty feed?** Check `VIDEOS_PATH`, file extensions, and that the container's
+user (UID 1000) can read the folder and files. Missing folders stop Compose rather
+than silently creating an empty library. A clip that appears but will not play may
+use a codec your browser cannot decode.
 
-## Features
-
-- **Correct HTTP Range** (`206` / `Content-Range` / `Accept-Ranges`) so iOS
-  plays and seeks — this is the whole point of the app.
-- **iOS-correct feed**: `muted`+`playsinline` autoplay, `100dvh`/`100svh`
-  scroll-snap (never `100vh`), one video playing at a time, tap-to-play
-  fallback.
-- **Randomized order**: the feed is shuffled fresh on every page load (server-
-  side, so no reorder flash). Large feeds load a slim first page and lazy-load
-  the rest as you scroll, continuing the same shuffled order.
-- **Windowed lazy-loading**: only a small window around the active card holds a
-  decoder; buffers ahead, caches recent, reloads on back-scroll.
-- **Adaptive fit**: off-aspect clips letterbox instead of cropping — in either
-  direction (landscape-on-portrait _and_ portrait-on-landscape).
-- **One control rail**: mute, loop/next (labelled with the current mode),
-  share/save, an info overlay, and an optional client-side hide control
-  (`ALLOW_HIDE`) — all on a single right-side rail. Plus a seek bar on the
-  active card.
-- **Favorites** (needs `DATA_DIR`): double-tap a clip — or tap the rail heart —
-  to favorite it; the heart fills on clips you've already liked. Long-press the
-  heart to open a **Favorites view** (`/liked`): your liked clips as a feed,
-  newest first. Persisted as a small `starred.json`; inert when no data volume.
-- **Image galleries** (TikTok + reddit photo posts): photo posts render as swipeable
-  carousels alongside videos — finger-follow drag, index dots/counter, double-tap
-  to like, and a full-carousel share link. One photo post = one feed item — a
-  multi-image carousel (`<id>_NN.<ext>` frames) or a single image (`<id>.<ext>`), with a
-  numeric (TikTok) or base36 (reddit) id, and `.gif` renders natively. A gallery with a soundtrack (`<id>.{m4a,mp3}`
-  beside its frames) **plays it, looping and mute-respecting** (a ♪ chip marks it; tap
-  to pause). Swipe by touch or a two-finger trackpad gesture; off-aspect photos
-  letterbox instead of over-cropping. Galleries never touch the
-  video decoder pool — gallery audio rides a single blessed `<audio>` channel, and
-  at most one element is ever audible.
-- **Installable PWA**: per-instance home-screen name, standalone portrait.
-- **Self-contained**: serves UI + bytes from one image; runs non-root.
-- Desktop fallback: ↑/↓ + `j`/`k` to move, Space to play/pause, `m` to mute.
+Use `docker compose logs -f` to inspect startup and `docker compose down` to stop.
+Stopping preserves favorites; **`docker compose down -v` deletes the data volume**.
+After downloading updated source, run the same start command to rebuild.
 
 ## Configuration
 
-All via environment variables:
+The settings most people need:
 
-| Variable         | Default       | Description                                                             |
-| ---------------- | ------------- | ----------------------------------------------------------------------- |
-| `VIDEO_DIR`      | `/srv/videos` | Directory scanned for videos (mount it read-only).                      |
-| `FEED_NAME`      | `feed`        | Title / branding, PWA home-screen name, and client storage key prefix.  |
-| `IGNORE_HIDDEN`  | `true`        | Hide dotfiles and `*.partial` (mid-download) files.                     |
-| `ALLOW_HIDE`     | `false`       | Show the per-card hide ("trash") control. Hiding is client-side only.   |
-| `PRELOAD_AHEAD`  | `3`           | Lazy-load window: cards ahead of the active one that carry a video src. |
-| `PRELOAD_BEHIND` | `2`           | Lazy-load window: cards behind the active one kept warm.                |
-| `AUTO_ADVANCE`   | `false`       | Default for autoplay-next (advance on end vs. loop); user can toggle.   |
-| `DATA_DIR`       | _(unset)_     | Writable dir for generated posters/metadata (0.5). Unset = feature off. |
-| `PORT`           | `3000`        | Listen port (adapter-node native).                                      |
-| `HOST`           | `0.0.0.0`     | Listen host (adapter-node native).                                      |
+| Setting       | Default       | What it does                                                        |
+| ------------- | ------------- | ------------------------------------------------------------------- |
+| `VIDEOS_PATH` | Required      | Host folder mounted read-only by Compose. Set it in `.env`.         |
+| `VIDEO_DIR`   | `/srv/videos` | Folder inside the container. Compose sets this; leave it alone.     |
+| `FEED_NAME`   | `feed`        | Feed title and home-screen name. Set it in `.env`.                  |
+| `DATA_DIR`    | `/data`       | Compose's writable volume for favorites and other saved feed state. |
 
-### Posters & metadata (optional, `DATA_DIR`)
+Outside Compose, `DATA_DIR` is unset by default, disabling saved state. Posters
+also need `POSTERS=true`; a data volume alone does not generate them.
+If you replace the named `/data` volume with a host bind mount, that folder must
+be writable by UID/GID **1000:1000** (`chown 1000:1000 /path/to/data` on Linux).
 
-Set `DATA_DIR` to a writable dir and forya generates its own poster thumbnails +
-video metadata (width/height/duration) with ffmpeg/ffprobe — no external tooling
-needed. Metadata pre-sets object-fit (no fit-jump) and posters fill the loading
-placeholder. **Off by default:** with `DATA_DIR` unset nothing is generated or
-written and behaviour is identical to before. forya writes **only** under
-`DATA_DIR`; `/srv/videos` stays read-only. The image declares `VOLUME /data`
-(owned by `node`):
+See the [guide](docs/guide.md) for tuning, posters, photo naming, endpoints,
+backups, and development. Changes to `.env` take effect when you run the start
+command again.
 
-```bash
-docker run -p 3000:3000 \
-  -v /my/videos:/srv/videos:ro -v forya-data:/data -e DATA_DIR=/data \
-  -e FEED_NAME=liked registry.mdbook.me/mikayla/forya
-```
+## Features
 
-Generation is lazy (first view of a clip has no poster; later views do) and
-bounded (one ffmpeg at a time, low priority) so it never competes with playback.
+- Swipe through a freshly shuffled feed, with one clip playing at a time.
+- Play, pause, seek, mute, or move to the next clip with on-screen controls.
+- Browse photo galleries alongside videos, including galleries with music.
+- Save favorites and open them at `/liked`.
+- Add the feed to your iPhone home screen with Share > Add to Home Screen.
 
-### The `/srv/videos` contract
+## Help and source
 
-forya treats `VIDEO_DIR` as **read-only input it does not own**. It only reads;
-it never writes, renames, or deletes. Mount it `:ro`:
-
-```bash
-docker run -p 3000:3000 -v /my/videos:/srv/videos:ro \
-  -e FEED_NAME=liked registry.mdbook.me/mikayla/forya
-```
-
-Supported extensions: **`.mp4` `.mov` `.webm` `.m4v`**. Dotfiles and `*.partial`
-files are skipped when `IGNORE_HIDDEN=true` (the default), so a downloader
-writing `clip.mp4.partial` won't surface a half-file. The **page feed is
-randomized** — shuffled fresh on every load (since 0.3.0; there is no resume to a
-previous position). The underlying scan is most-recently-modified first, which is
-what the `/api/feed` endpoint still returns by default.
-
-### Endpoints
-
-- `GET /` — the feed UI.
-- `GET /api/feed` — JSON manifest: `{ feed, items: [{ name, url, size, mtime, type }] }`. `?shuffle=1&seed=N` for a deterministic shuffle; `?offset=O&limit=L` to paginate (used by the page's lazy-load). No params → the full mtime-desc list. A photo-post **gallery** item additionally carries `media: [{ name, url, type }]` (its ordered frames), and — when it has a soundtrack — an `audio: { name, url, type }`; a video item has neither.
-- `GET|HEAD /api/media/<name>` — the video (or gallery-frame) bytes, with full Range support.
-- `GET /api/poster/<name>?v=<mtime>` — the generated JPEG poster, or `204` when none yet (needs `DATA_DIR`).
-- `GET /liked` — the favorites view (your liked clips as a feed, newest first; needs `DATA_DIR`).
-- `GET /api/starred` — `{ enabled, starred: string[] }`; `PUT|DELETE /api/starred/<name>` toggles a favorite (needs `DATA_DIR`).
-- `GET /api/healthz` — `200 ok` (healthcheck).
-- `GET /manifest.webmanifest` — the PWA manifest, branded with `FEED_NAME`.
-
-## Auth
-
-forya ships **no built-in authentication** (v1). Gate it at your reverse proxy.
-This homelab fronts the public domains with **Authentik forward-auth** and
-leaves the LAN open. _TODO: optional in-app native OIDC._
-
-## Multiple feeds
-
-One image, one feed per container. To serve several feeds, run several
-containers with different `VIDEO_DIR` + `FEED_NAME`. _Multi-feed within a single
-instance is a future TODO, not built now._
-
-## Development
-
-```bash
-npm install
-npm run dev          # dev server
-npm run check        # svelte-check
-npm run lint         # eslint
-npm run format:check # prettier
-npm test             # vitest (Range + scan guards)
-npm run build        # adapter-node build → ./build
-node build           # run the built server
-```
-
-## Repository
-
-The canonical repository is **GitLab** (`gitlab.mdbook.me/mikayla/forya`), which
-runs CI and publishes the image. It **push-mirrors** to
-[`github.com/mdbook/forya`](https://github.com/mdbook/forya) for public OSS
-visibility. **Issues and pull requests on the GitHub mirror are not watched** —
-please use GitLab.
+[Report a bug on GitHub](https://github.com/mdbook/forya/issues/new) with your
+browser, setup, and steps to reproduce. Do not attach private media or credentials.
+Source is available on [GitHub](https://github.com/mdbook/forya) and
+[GitLab](https://gitlab.mdbook.me/mikayla/forya).
 
 ## License
 
