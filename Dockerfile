@@ -1,11 +1,12 @@
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS build
+# Node 24.22.1 includes the bundled Brotli fix for CVE-2026-111497.
+FROM node:24.22.1-alpine AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+FROM node:24.22.1-alpine
 WORKDIR /app
 # Build provenance (0.5.4): CI passes the commit SHA via `--build-arg BUILD_SHA`;
 # baked as a runtime ENV so config.ts can surface it in the DEBUG_PLAYBACK overlay
@@ -17,9 +18,10 @@ ENV NODE_ENV=production PORT=3000 HOST=0.0.0.0 VIDEO_DIR=/srv/videos FEED_NAME=f
 # spawned when DATA_DIR is set; without it the feature is fully dark (the binary
 # is then just dead weight — acceptable for one image across all configs). ffmpeg
 # floats within the alpine branch — do NOT apk-pin it (alpine keeps only the
-# latest build per branch, so a pin breaks when the repo rolls); the digest-pinned
-# base above is what gives reproducibility. Resolved at build: ffmpeg 8.0.1.
-RUN apk add --no-cache ffmpeg && mkdir -p /data && chown node:node /data
+# latest build per branch, so a pin breaks when the repo rolls).
+# Require patched system Brotli too: upgrade a lagging base or fail the build
+# if its Alpine repositories cannot provide the fix. This is a floor, not a pin.
+RUN apk add --no-cache --upgrade ffmpeg 'brotli-libs>=1.2.1-r0' && mkdir -p /data && chown node:node /data
 COPY --from=build /app/build ./build
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json

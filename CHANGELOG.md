@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/). `package.json` `version` is
 canonical and `VERSION` mirrors it; bump both in the same commit.
 
+## 0.18.1 — Patched Node and Brotli
+
+Both Docker build stages now use supported Node 24.22.1 to address CVE-2026-111497
+in Node's bundled Brotli. The runtime also requires Alpine `brotli-libs>=1.2.1-r0`,
+upgrading an older installed library and failing the build if no patched package
+is available. The image still runs as the non-root `node` user.
+
 ## 0.18.0 — Save to device (save-to-photos)
 
 Adds a dedicated **Save** control to the action rail (#122) that saves the current media to the
