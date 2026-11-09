@@ -1,89 +1,99 @@
-# forya
+<p align="center">
+  <img src="static/icon-192.png" alt="forya logo" width="112">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+<h1 align="center">forya</h1>
 
-A phone-friendly, vertical feed for your own videos and photo galleries.
-Point it at a folder, then watch in your browser. Your source files stay read-only.
+<p align="center">
+  <b>A vertical video feed for your own clips.</b><br>
+  Point it at a folder, open it on your phone, and swipe. Your files are never touched.
+</p>
 
-## Run with Docker Compose
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="docs/install.md">Install guide</a> ·
+  <a href="docs/configuration.md">Configuration</a> ·
+  <a href="#docs">Docs</a>
+</p>
 
-You need **Docker with Compose v2**, an internet connection for the first build,
-and a folder containing `.mp4`, `.mov`, `.webm`, or `.m4v` files. Playback depends
-on your browser's codec support; forya does not convert videos.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/node-24-339933" alt="Node 24">
+  <img src="https://img.shields.io/badge/docker-compose-2496ED" alt="Runs with Docker Compose">
+</p>
 
-**Image availability:** there is not yet a verified public image to recommend.
-Compose builds the included Dockerfile locally, with no registry login or local
-Node installation. The first build can take several minutes.
+<p align="center">
+  <img src="docs/screenshots/feed.jpg" alt="forya playing a clip full screen on a phone, with mute, next, share, save and info buttons on the right" width="300">
+</p>
 
-1. [Download the source ZIP](https://github.com/mdbook/forya/archive/refs/heads/main.zip)
-   and extract it, or clone [the repository](https://github.com/mdbook/forya).
-   Open a terminal in the extracted repository folder.
-2. Create a file named `.env` in that folder with your editor. Add these settings,
-   replacing the video path with your **existing** folder's absolute path:
+forya is a self-hosted, TikTok-style feed for videos and photo galleries you already have. It shuffles your folder, plays one clip at a time, and handles seeking properly on iPhone Safari. It runs as one small container, needs no database, and mounts your media read-only.
 
-```dotenv
-VIDEOS_PATH="/path/to/your/videos"
-FEED_NAME="My feed"
-```
+## Quick start
 
-Keep quotes around paths containing spaces. On Docker Desktop, allow Docker
-access to that folder if prompted.
+You need [Docker with the Compose v2 plugin](https://docs.docker.com/compose/install/) and a folder with `.mp4`, `.mov`, `.webm` or `.m4v` files. There is no public image yet, so Compose builds one from source. Allow a few minutes for the first start.
+
+1. Get the files:
+
+   ```bash
+   git clone https://github.com/mdbook/forya
+   cd forya
+   ```
+
+2. Create a file named `.env` in that folder with your own **existing** video folder (use the absolute path, and keep the quotes if it has spaces):
+
+   ```dotenv
+   VIDEOS_PATH="/path/to/your/videos"
+   FEED_NAME="My feed"
+   ```
 
 3. Start it:
 
-```bash
-docker compose up -d --build
-```
+   ```bash
+   docker compose up -d --build
+   ```
 
-Open <http://localhost:3000>. You should see your clips after the initial scan.
-Compose keeps favorites in a named volume, without changing your video folder.
-The default only accepts connections from this computer, since forya has no login.
-For phone access or hosting, see [access and authentication](docs/guide.md#access-and-authentication).
+4. Open [localhost:3000](http://localhost:3000). Your clips show up after the first scan.
 
-**Empty feed?** Check `VIDEOS_PATH`, file extensions, and that the container's
-user (UID 1000) can read the folder and files. Missing folders stop Compose rather
-than silently creating an empty library. A clip that appears but will not play may
-use a codec your browser cannot decode.
+forya has no login, so by default it only accepts connections from the computer it runs on. To watch on your phone, see [access and authentication](docs/install.md#access-and-authentication).
 
-Use `docker compose logs -f` to inspect startup and `docker compose down` to stop.
-Stopping preserves favorites; **`docker compose down -v` deletes the data volume**.
-After downloading updated source, run the same start command to rebuild.
+Stop it with `docker compose down`. That keeps your favorites. `docker compose down -v` deletes them.
 
 ## Configuration
 
-The settings most people need:
+Settings are environment variables. With Compose, the common ones go in `.env`:
 
-| Setting       | Default       | What it does                                                        |
-| ------------- | ------------- | ------------------------------------------------------------------- |
-| `VIDEOS_PATH` | Required      | Host folder mounted read-only by Compose. Set it in `.env`.         |
-| `VIDEO_DIR`   | `/srv/videos` | Folder inside the container. Compose sets this; leave it alone.     |
-| `FEED_NAME`   | `feed`        | Feed title and home-screen name. Set it in `.env`.                  |
-| `DATA_DIR`    | `/data`       | Compose's writable volume for favorites and other saved feed state. |
+| Setting        | Default     | What it does                           |
+| -------------- | ----------- | -------------------------------------- |
+| `VIDEOS_PATH`  | required    | Host folder mounted read-only.         |
+| `FEED_NAME`    | `feed`      | Feed title and home-screen name.       |
+| `POSTERS`      | `false`     | Generate thumbnails and metadata.      |
+| `BIND_ADDRESS` | `127.0.0.1` | Host address the port is published on. |
 
-Outside Compose, `DATA_DIR` is unset by default, disabling saved state. Posters
-also need `POSTERS=true`; a data volume alone does not generate them.
-If you replace the named `/data` volume with a host bind mount, that folder must
-be writable by UID/GID **1000:1000** (`chown 1000:1000 /path/to/data` on Linux).
-
-See the [guide](docs/guide.md) for tuning, posters, photo naming, endpoints,
-backups, and development. Changes to `.env` take effect when you run the start
-command again.
+Tuning knobs like preload window, auto-advance and share links are in the [configuration reference](docs/configuration.md). Run the same start command again after changing `.env`.
 
 ## Features
 
-- Swipe through a freshly shuffled feed, with one clip playing at a time.
-- Play, pause, seek, mute, or move to the next clip with on-screen controls.
-- Browse photo galleries alongside videos, including galleries with music.
-- Save favorites and open them at `/liked`.
-- Add the feed to your iPhone home screen with Share > Add to Home Screen.
+- **A shuffled feed.** Every load is a fresh shuffle, with one clip playing at a time.
+- **Built for iPhone Safari.** Correct HTTP Range support means playback and seeking work, and only nearby videos hold a decoder.
+- **Videos and photo galleries.** Galleries can have a looping soundtrack.
+- **Controls where your thumb is.** Play, pause, seek, mute, volume and next from on-screen controls. On a keyboard use Up/Down or `j`/`k`, Space and `m`.
+- **Favorites.** Mark a clip and find it again at `/liked`.
+- **Save and share.** Save a clip to your device, or share a link.
+- **Home-screen app.** On iPhone use Share > Add to Home Screen.
+- **Read-only by design.** forya only writes to its own optional data volume, never to your media.
 
-## Help and source
+## Docs
 
-[Report a bug on GitHub](https://github.com/mdbook/forya/issues/new) with your
-browser, setup, and steps to reproduce. Do not attach private media or credentials.
-Source is available on [GitHub](https://github.com/mdbook/forya) and
-[GitLab](https://gitlab.mdbook.me/mikayla/forya).
+- [Install guide](docs/install.md): requirements, access and authentication, backups, updates, troubleshooting.
+- [Configuration](docs/configuration.md): every setting, posters, tuning.
+- [How it works](docs/architecture.md): media layout, playback, endpoints.
+- [Changelog](CHANGELOG.md): version history.
+
+## Contributing
+
+Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and tests. Please do not attach private media or credentials to issues.
 
 ## License
 
-[MIT](./LICENSE) © Mikayla D. Burke
+[MIT](LICENSE) © Mikayla D. Burke
