@@ -23,14 +23,9 @@
   <img src="https://img.shields.io/badge/docker-compose-2496ED" alt="Runs with Docker Compose">
 </p>
 
-```
- your videos (read-only)                  your phone or browser
- /srv/videos  --> scan --> /api/feed  --> shuffled vertical feed
-      |                                          |
-      +--> /api/media/<name>  <-- Range requests (play, seek)
-
- optional /data volume: favorites, hidden items, share links, posters
-```
+<p align="center">
+  <img src="docs/screenshots/feed.jpg" alt="forya playing a clip full screen on a phone, with mute, next, share, save and info buttons on the right" width="300">
+</p>
 
 forya is a self-hosted, TikTok-style feed for videos and photo galleries you already have. It shuffles your folder, plays one clip at a time, and handles seeking properly on iPhone Safari. It runs as one small container, needs no database, and mounts your media read-only.
 
