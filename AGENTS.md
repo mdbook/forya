@@ -12,6 +12,8 @@ buggy Caddy+React feed (`erin`) on iOS Safari. See [`README.md`](./README.md)
 for the user-facing story and [`handoff.md`](./handoff.md) for the rewrite
 rationale and load-bearing decisions.
 
+Read docs/STANDARDS.md and docs/DESIGN.md before changing code or UI.
+
 ## Scope — what this repo owns vs. doesn't
 
 **Owns:** the image and the app — app code, tests, `Dockerfile`,
