@@ -6,8 +6,8 @@ const compose = readFileSync(new URL('../compose.yaml', import.meta.url), 'utf8'
 // Source-policy guards, not a substitute for `docker compose config` or a smoke run.
 describe('Compose quick start', () => {
 	it('builds the included Dockerfile without depending on a private image', () => {
-		expect(compose).toMatch(/^    build: \.$/m);
-		expect(compose).toMatch(/^    image: forya:local$/m);
+		expect(compose).toMatch(/^ {4}build: \.$/m);
+		expect(compose).toMatch(/^ {4}image: forya:local$/m);
 		expect(compose).toContain('pull_policy: build');
 		expect(compose).not.toContain('registry.mdbook.me');
 	});
@@ -22,7 +22,7 @@ describe('Compose quick start', () => {
 	it('persists feed state without opting into poster generation', () => {
 		expect(compose).toContain('DATA_DIR: /data');
 		expect(compose).toContain('- forya-data:/data');
-		expect(compose).toMatch(/^volumes:\n  forya-data:\s*$/m);
+		expect(compose).toMatch(/^volumes:\n {2}forya-data:\s*$/m);
 		expect(compose).toContain('FEED_NAME: ${FEED_NAME:-feed}');
 		expect(compose).toContain('POSTERS: ${POSTERS:-false}');
 	});
